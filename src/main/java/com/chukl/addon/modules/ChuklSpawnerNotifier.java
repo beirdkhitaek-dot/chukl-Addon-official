@@ -59,6 +59,7 @@ public class ChuklSpawnerNotifier extends Module {
 
     private record Found(BlockPos pos, String mobId, String mobName, boolean natural, String reason) {}
 
+    private static final Set<String> NATURAL_MOBS = Set.of("zombie", "skeleton", "spider", "cave_spider", "silverfish", "blaze");
     private static final Pattern SPAWN_DATA = Pattern.compile("SpawnData:\\{.*?\\bid:[\"']([a-z0-9_.:/-]+)[\"']", Pattern.DOTALL);
     private static final SoundEvent PING = SoundEvent.of(Identifier.of("minecraft", "entity.experience_orb.pickup"));
 
@@ -70,8 +71,16 @@ public class ChuklSpawnerNotifier extends Module {
 
     private final Setting<Boolean> checkSurroundings = sgGeneral.add(new BoolSetting.Builder()
         .name("check-surroundings")
-        .description("Also check the blocks around spawners with a natural mob (zombie, skeleton, spider, cave spider, silverfish, blaze). On = flag them when the dungeon / mineshaft / stronghold / fortress is missing. Off = only flag spawners with a mob that never spawns naturally.")
+        .description("Judge a spawner by what is around it: inside a natural dungeon, mineshaft, stronghold or nether fortress = natural, anywhere else = placed by a player. Works even when the server hides the mob. Off = judge by the mob only (a hidden mob counts as natural).")
         .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Boolean> requireNaturalMob = sgGeneral.add(new BoolSetting.Builder()
+        .name("require-natural-mob")
+        .description("Also flag a spawner inside a natural structure when its mob does not belong there (for example a pig in a dungeon). Leave off if your server changes or hides spawner mobs.")
+        .defaultValue(false)
+        .visible(checkSurroundings::get)
         .build()
     );
 
@@ -325,21 +334,31 @@ public class ChuklSpawnerNotifier extends Module {
         shown = list;
     }
 
-    /** Reads the mob and decides natural / unnatural. Returns null while the mob is still unknown (data not synced yet). */
+    /** Reads the mob and decides natural / unnatural. Returns null while it is too early to judge. */
     private Found evaluate(ClientWorld world, BlockEntity be, BlockPos pos) {
         String id = readMobId(world, be);
+        boolean hidden = id == null;
 
-        if (id == null) {
-            int tries = attempts.merge(pos, 1, Integer::sum);
-            if (tries < 5) return null;
-            id = "unknown"; // gave up: show it as an unknown mob
-        }
+        // Wait for the mob data and for the chunks around the spawner, so its surroundings can be judged properly.
+        // Servers that hide the mob never send it, so after a few tries it is judged by its surroundings alone.
+        int tries = attempts.merge(pos, 1, Integer::sum);
+        if ((hidden || !isAreaLoaded(world, pos, 4)) && tries < 8) return null;
 
-        String path = id.contains(":") ? id.substring(id.indexOf(':') + 1) : id;
-        String name = displayName(id, path);
+        String path = hidden ? "unknown" : (id.contains(":") ? id.substring(id.indexOf(':') + 1) : id);
+        String name = hidden ? "Unknown mob (hidden by the server)" : displayName(id, path);
 
-        String reason = unnaturalReason(world, pos, path);
+        String reason = unnaturalReason(world, pos, path, name, hidden);
         return new Found(pos, path, name, reason == null, reason == null ? "natural" : reason);
+    }
+
+    private static boolean isAreaLoaded(ClientWorld world, BlockPos pos, int radius) {
+        var manager = world.getChunkManager();
+        for (int cx = (pos.getX() - radius) >> 4; cx <= (pos.getX() + radius) >> 4; cx++) {
+            for (int cz = (pos.getZ() - radius) >> 4; cz <= (pos.getZ() + radius) >> 4; cz++) {
+                if (!manager.isChunkLoaded(cx, cz)) return false;
+            }
+        }
+        return true;
     }
 
     /** The spawner's mob id (like "minecraft:zombie") from the data the server sends to the client. */
@@ -374,33 +393,42 @@ public class ChuklSpawnerNotifier extends Module {
     }
 
     /** null = looks natural. Otherwise the reason it looks placed by a player. */
-    private String unnaturalReason(World world, BlockPos pos, String mob) {
-        switch (mob) {
-            case "zombie":
-            case "skeleton":
-            case "spider": {
-                if (!checkSurroundings.get()) return null;
-                boolean floor = isCobble(world.getBlockState(pos.down()));
-                int n = count(world, pos, 3, ChuklSpawnerNotifier::isCobble);
-                return floor && n >= 8 ? null : "no dungeon room around it (placed by a player?)";
+    private String unnaturalReason(World world, BlockPos pos, String mob, String name, boolean hidden) {
+        if (checkSurroundings.get()) {
+            String structure = structureAround(world, pos);
+            if (structure == null) {
+                return hidden ? "no natural structure around it (mob hidden by the server)"
+                    : "no natural structure around it (placed by a player?)";
             }
-            case "cave_spider": {
-                if (!checkSurroundings.get()) return null;
-                int n = count(world, pos, 4, s -> s.isOf(Blocks.COBWEB) || isMineshaftWood(s));
-                return n >= 3 ? null : "no mineshaft around it (placed by a player?)";
+            if (requireNaturalMob.get() && !hidden && !mobFits(structure, mob)) {
+                return "inside a " + structure + ", but " + name + " never spawns there (changed by a player?)";
             }
-            case "silverfish": {
-                if (!checkSurroundings.get()) return null;
-                int n = count(world, pos, 4, s -> isStrongholdBrick(s) || s.isOf(Blocks.END_PORTAL_FRAME));
-                return n >= 6 ? null : "no stronghold around it (placed by a player?)";
-            }
-            case "blaze": {
-                if (!checkSurroundings.get()) return null;
-                int n = count(world, pos, 4, ChuklSpawnerNotifier::isNetherBrick);
-                return n >= 6 ? null : "no nether fortress around it (placed by a player?)";
-            }
-            default:
-                return "this mob never spawns from a natural spawner (placed or changed by a player)";
+            return null;
+        }
+
+        // mob only: a hidden mob cannot be judged, so it is not flagged
+        if (hidden || NATURAL_MOBS.contains(mob)) return null;
+        return "this mob never spawns from a natural spawner (placed or changed by a player)";
+    }
+
+    /** The natural structure the spawner stands in, or null if there is none. */
+    private static String structureAround(World world, BlockPos pos) {
+        // a dungeon spawner stands on a cobblestone / mossy cobblestone floor inside a cobblestone room
+        if (isCobble(world.getBlockState(pos.down())) && count(world, pos, 3, ChuklSpawnerNotifier::isCobble) >= 8) return "dungeon";
+        // a mineshaft spawner sits in a field of cobwebs
+        if (count(world, pos, 4, s -> s.isOf(Blocks.COBWEB)) >= 3) return "mineshaft";
+        if (count(world, pos, 4, s -> isStrongholdBrick(s) || s.isOf(Blocks.END_PORTAL_FRAME)) >= 6) return "stronghold";
+        if (count(world, pos, 4, ChuklSpawnerNotifier::isNetherBrick) >= 6) return "nether fortress";
+        return null;
+    }
+
+    private static boolean mobFits(String structure, String mob) {
+        switch (structure) {
+            case "dungeon": return mob.equals("zombie") || mob.equals("skeleton") || mob.equals("spider");
+            case "mineshaft": return mob.equals("cave_spider");
+            case "stronghold": return mob.equals("silverfish");
+            case "nether fortress": return mob.equals("blaze");
+            default: return true;
         }
     }
 
