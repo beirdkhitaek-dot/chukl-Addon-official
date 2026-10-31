@@ -18,6 +18,7 @@ import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import meteordevelopment.meteorclient.utils.render.RenderUtils;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.registry.Registries;
 import net.minecraft.state.property.Properties;
@@ -55,7 +56,11 @@ public class SusChunkFinderTest extends Module {
 
     public enum RenderMode { Best_Chunks, All_Chunks }
 
-    public enum MarkerStyle { Outline, Solid, Light_Beam, Pulse_Beam, Rainbow_Beam }
+    public enum MarkerStyle { Outline, Solid, Light_Beam, Pulse_Beam, Rainbow_Beam, Lightning }
+
+    public enum ChunkStyle { Energy_Orb, Column, Orb_And_Column }
+
+    public enum YMode { Fixed, Follow_Player }
 
     private record Zone(double centerX, double centerZ, int size, int maxHeat, int level) {}
 
@@ -177,7 +182,7 @@ public class SusChunkFinderTest extends Module {
     private final Setting<SettingColor> chunkSideColor = sgRender.add(new ColorSetting.Builder()
         .name("chunk-fill-color")
         .description("Fill color of sus chunks (opacity comes from the Alpha setting).")
-        .defaultValue(new SettingColor(255, 0, 0, 110))
+        .defaultValue(new SettingColor(70, 150, 255, 110))
         .visible(() -> chunkShapeMode.get() != ShapeMode.Lines)
         .build()
     );
@@ -185,17 +190,17 @@ public class SusChunkFinderTest extends Module {
     private final Setting<SettingColor> chunkLineColor = sgRender.add(new ColorSetting.Builder()
         .name("chunk-outline-color")
         .description("Outline color of sus chunks.")
-        .defaultValue(new SettingColor(255, 0, 0, 200))
+        .defaultValue(new SettingColor(130, 200, 255, 220))
         .visible(() -> chunkShapeMode.get() != ShapeMode.Sides)
         .build()
     );
 
     private final Setting<Integer> chunkY = sgRender.add(new IntSetting.Builder()
         .name("chunk-y")
-        .description("Height the chunk square is drawn at.")
+        .description("Y level the orb, pillar and flat layer are drawn at. Any level from -64 to 320.")
         .defaultValue(63)
         .range(-64, 320)
-        .sliderRange(-64, 128)
+        .sliderRange(-64, 320)
         .build()
     );
 
@@ -219,8 +224,8 @@ public class SusChunkFinderTest extends Module {
 
     private final Setting<MarkerStyle> markerStyle = sgRender.add(new EnumSetting.Builder<MarkerStyle>()
         .name("marker-style")
-        .description("Look of the zone pillar. Outline = old thin lines, Solid = filled column, Light Beam = glowing beam of light, Pulse Beam = beam that breathes, Rainbow Beam = color-cycling beam.")
-        .defaultValue(MarkerStyle.Light_Beam)
+        .description("Look of the pillar. Lightning = crackling electric bolts, Light Beam = glowing beam, Pulse Beam = beam that breathes, Rainbow Beam = color-cycling beam, Solid = filled column, Outline = thin lines.")
+        .defaultValue(MarkerStyle.Lightning)
         .visible(() -> zoneMarker.get())
         .build()
     );
@@ -228,7 +233,7 @@ public class SusChunkFinderTest extends Module {
     private final Setting<SettingColor> markerColor = sgRender.add(new ColorSetting.Builder()
         .name("marker-color")
         .description("Color of the zone pillar (ignored by Rainbow Beam).")
-        .defaultValue(new SettingColor(255, 60, 60, 255))
+        .defaultValue(new SettingColor(70, 150, 255, 255))
         .visible(() -> zoneMarker.get() && markerStyle.get() != MarkerStyle.Rainbow_Beam)
         .build()
     );
@@ -317,6 +322,85 @@ public class SusChunkFinderTest extends Module {
         .description("Print the coordinates of the best dig spot in chat when it changes.")
         .defaultValue(true)
         .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
+        .build()
+    );
+
+    private final Setting<ChunkStyle> chunkStyle = sgRender.add(new EnumSetting.Builder<ChunkStyle>()
+        .name("chunk-style")
+        .description("How the best chunk looks. Energy Orb = glowing orb of light with electric arcs, Column = the dig-range column, Orb And Column = both.")
+        .defaultValue(ChunkStyle.Energy_Orb)
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
+        .build()
+    );
+
+    private final Setting<Double> orbSize = sgRender.add(new DoubleSetting.Builder()
+        .name("orb-size")
+        .description("Radius of the energy orb in blocks.")
+        .defaultValue(3.0)
+        .range(0.5, 24)
+        .sliderRange(0.5, 12)
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks && chunkStyle.get() != ChunkStyle.Column)
+        .build()
+    );
+
+    private final Setting<Integer> orbArcs = sgRender.add(new IntSetting.Builder()
+        .name("orb-arcs")
+        .description("Number of electric arcs crackling out of the orb (0 = none).")
+        .defaultValue(7)
+        .range(0, 20)
+        .sliderRange(0, 16)
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks && chunkStyle.get() != ChunkStyle.Column)
+        .build()
+    );
+
+    private final Setting<Double> orbSpeed = sgRender.add(new DoubleSetting.Builder()
+        .name("orb-speed")
+        .description("How fast the orb spins and pulses.")
+        .defaultValue(1.0)
+        .range(0.1, 5)
+        .sliderRange(0.1, 3)
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks && chunkStyle.get() != ChunkStyle.Column)
+        .build()
+    );
+
+    private final Setting<YMode> yMode = sgRender.add(new EnumSetting.Builder<YMode>()
+        .name("y-mode")
+        .description("Fixed = use chunk-y. Follow Player = stay at your own height plus y-offset.")
+        .defaultValue(YMode.Fixed)
+        .build()
+    );
+
+    private final Setting<Integer> yOffset = sgRender.add(new IntSetting.Builder()
+        .name("y-offset")
+        .description("Blocks above (or below, if negative) your own height.")
+        .defaultValue(0)
+        .range(-64, 128)
+        .sliderRange(-32, 64)
+        .visible(() -> yMode.get() == YMode.Follow_Player)
+        .build()
+    );
+
+    private final Setting<Boolean> showShaft = sgRender.add(new BoolSetting.Builder()
+        .name("dig-shaft")
+        .description("Draw the one-block dig shaft from the surface down to the bottom of the dig range.")
+        .defaultValue(true)
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
+        .build()
+    );
+
+    private final Setting<Boolean> tracers = sgRender.add(new BoolSetting.Builder()
+        .name("tracers")
+        .description("Draw a line from your crosshair to the best chunk.")
+        .defaultValue(true)
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
+        .build()
+    );
+
+    private final Setting<SettingColor> tracerColor = sgRender.add(new ColorSetting.Builder()
+        .name("tracer-color")
+        .description("Color of the tracer line.")
+        .defaultValue(new SettingColor(100, 200, 255, 220))
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks && tracers.get())
         .build()
     );
 
@@ -999,6 +1083,12 @@ public class SusChunkFinderTest extends Module {
         }
     }
 
+    /** The Y level everything is drawn at: the fixed chunk-y, or your own height plus the offset. */
+    private double baseY() {
+        if (yMode.get() == YMode.Follow_Player && mc.player != null) return mc.player.getY() + yOffset.get();
+        return chunkY.get();
+    }
+
     private double rank(ChunkPos c, Map<ChunkPos, Integer> levels) {
         return heatmap.getOrDefault(c, 0) + ugScores.getOrDefault(c, 0) + 5.0 * levels.getOrDefault(c, 0);
     }
@@ -1049,6 +1139,10 @@ public class SusChunkFinderTest extends Module {
         List<ChunkPos> best = bestChunks;
         if (best.isEmpty()) return;
 
+        ChunkStyle style = chunkStyle.get();
+        boolean orb = style != ChunkStyle.Column;
+        boolean column = style != ChunkStyle.Energy_Orb;
+
         int yMin = Math.min(ugMinY.get(), ugMaxY.get());
         int yMax = Math.max(ugMinY.get(), ugMaxY.get());
         int inset = chunkInset.get();
@@ -1056,30 +1150,121 @@ public class SusChunkFinderTest extends Module {
         SettingColor line = chunkLineColor.get();
         SettingColor mark = markerColor.get();
         ShapeMode mode = chunkShapeMode.get();
-        double shaftTop = Math.max(chunkY.get(), yMax) + 1;
+        double y0 = baseY();
+        double shaftTop = Math.max(y0, yMax) + 1;
 
         List<double[]> beams = new ArrayList<>();
         for (int i = 0; i < best.size(); i++) {
             ChunkPos cp = best.get(i);
+            double ox = cp.getStartX() + 8.0, oz = cp.getStartZ() + 8.0;
 
-            // the chunk, from the bottom of the dig range up to the top of it
-            Color side = new Color(fill.r, fill.g, fill.b, alpha.get());
-            event.renderer.box(
-                cp.getStartX() + inset, yMin, cp.getStartZ() + inset,
-                cp.getStartX() + 16 - inset, yMax + 1, cp.getStartZ() + 16 - inset,
-                side, line, mode, 0
-            );
+            if (column) {
+                // the chunk, from the bottom of the dig range up to the top of it
+                Color side = new Color(fill.r, fill.g, fill.b, alpha.get());
+                event.renderer.box(
+                    cp.getStartX() + inset, yMin, cp.getStartZ() + inset,
+                    cp.getStartX() + 16 - inset, yMax + 1, cp.getStartZ() + 16 - inset,
+                    side, line, mode, 0
+                );
+            }
 
-            // the dig shaft: one block wide, from the surface down to the bottom
-            BlockPos t = digTarget(cp);
-            Color shaft = new Color(mark.r, mark.g, mark.b, 150);
-            Color shaftLine = new Color(255, 255, 255, 220);
-            event.renderer.box(t.getX(), yMin, t.getZ(), t.getX() + 1, shaftTop, t.getZ() + 1, shaft, shaftLine, ShapeMode.Both, 0);
+            if (orb) renderOrb(event, ox, y0, oz, orbSize.get(), cp.x * 31 + cp.z);
 
-            beams.add(new double[]{t.getX() + 0.5, t.getZ() + 0.5, i == 0 ? 2 : 1});
+            if (showShaft.get()) {
+                // the dig shaft: one block wide, from the surface down to the bottom
+                BlockPos t = digTarget(cp);
+                Color shaft = new Color(mark.r, mark.g, mark.b, 150);
+                Color shaftLine = new Color(255, 255, 255, 220);
+                event.renderer.box(t.getX(), yMin, t.getZ(), t.getX() + 1, shaftTop, t.getZ() + 1, shaft, shaftLine, ShapeMode.Both, 0);
+            }
+
+            if (tracers.get()) {
+                SettingColor tc = tracerColor.get();
+                event.renderer.line(
+                    RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z,
+                    ox, y0, oz,
+                    new Color(tc.r, tc.g, tc.b, tc.a)
+                );
+            }
+
+            beams.add(new double[]{ox, oz, i == 0 ? 2 : 1});
         }
 
         if (zoneMarker.get()) renderMarkers(event, beams);
+    }
+
+    /** A circle of line segments around (cx,cy,cz) in the plane spanned by the unit vectors u and v. */
+    private void ring(Render3DEvent event, double cx, double cy, double cz, double r,
+                      double ux, double uy, double uz, double vx, double vy, double vz, Color color) {
+        final int n = 20;
+        double px = cx + r * ux, py = cy + r * uy, pz = cz + r * uz;
+        for (int i = 1; i <= n; i++) {
+            double a = i * (Math.PI * 2 / n);
+            double c = Math.cos(a), s = Math.sin(a);
+            double x = cx + r * (c * ux + s * vx);
+            double y = cy + r * (c * uy + s * vy);
+            double z = cz + r * (c * uz + s * vz);
+            event.renderer.line(px, py, pz, x, y, z, color);
+            px = x; py = y; pz = z;
+        }
+    }
+
+    /** A glowing, spinning orb of light with white-hot core and crackling electric arcs. */
+    private void renderOrb(Render3DEvent event, double cx, double cy, double cz, double r, int seed) {
+        double t = (System.currentTimeMillis() % 1000000L) / 1000.0 * orbSpeed.get();
+        double pulse = 0.85 + 0.15 * Math.sin(t * 4.0);
+        double spin = t * 1.2;
+        double cs = Math.cos(spin), sn = Math.sin(spin);
+
+        SettingColor base = markerColor.get();
+        int cr = base.r, cg = base.g, cb = base.b;
+
+        // soft glow: fainter, slightly bigger rings around the orb
+        for (int g = 1; g <= markerGlow.get(); g++) {
+            double rr = r * (1.0 + 0.18 * g);
+            Color halo = new Color(cr, cg, cb, (int) (Math.max(10, 110 / (g + 0.5)) * pulse));
+            ring(event, cx, cy, cz, rr, 1, 0, 0, 0, 0, 1, halo);
+            ring(event, cx, cy, cz, rr, cs, 0, sn, 0, 1, 0, halo);
+            ring(event, cx, cy, cz, rr, -sn, 0, cs, 0, 1, 0, halo);
+        }
+
+        // the sphere: equator, two spinning meridians and two latitude rings
+        Color shell = new Color(Math.min(255, cr + 90), Math.min(255, cg + 90), Math.min(255, cb + 90), (int) (235 * pulse));
+        ring(event, cx, cy, cz, r, 1, 0, 0, 0, 0, 1, shell);
+        ring(event, cx, cy, cz, r, cs, 0, sn, 0, 1, 0, shell);
+        ring(event, cx, cy, cz, r, -sn, 0, cs, 0, 1, 0, shell);
+        double lat = r * 0.6, latR = r * 0.8;
+        ring(event, cx, cy + lat, cz, latR, 1, 0, 0, 0, 0, 1, shell);
+        ring(event, cx, cy - lat, cz, latR, 1, 0, 0, 0, 0, 1, shell);
+
+        // white-hot core
+        double core = r * 0.2 * (0.9 + 0.2 * pulse);
+        event.renderer.box(cx - core, cy - core, cz - core, cx + core, cy + core, cz + core,
+            new Color(255, 255, 255, 240), new Color(190, 225, 255, 255), ShapeMode.Both, 0);
+
+        // electric arcs: jagged lines that jump to a new random shape ~11 times a second
+        int arcs = orbArcs.get();
+        long slice = System.currentTimeMillis() / 90;
+        Color bolt = new Color(225, 242, 255, 235);
+        for (int a = 0; a < arcs; a++) {
+            java.util.Random rnd = new java.util.Random(slice * 7919L + a * 104729L + seed);
+            double theta = rnd.nextDouble() * Math.PI * 2;
+            double dy = rnd.nextDouble() * 2 - 1;
+            double rr = Math.sqrt(1 - dy * dy);
+            double dx = rr * Math.cos(theta), dz = rr * Math.sin(theta);
+            double len = r * (1.3 + rnd.nextDouble() * 0.9);
+            double px = cx, py = cy, pz = cz;
+            final int segs = 6;
+            for (int sg = 1; sg <= segs; sg++) {
+                double f = sg / (double) segs;
+                double jit = r * 0.2 * (1.0 - f * 0.5);
+                double x = cx + dx * len * f + (rnd.nextDouble() - 0.5) * 2 * jit;
+                double y = cy + dy * len * f + (rnd.nextDouble() - 0.5) * 2 * jit;
+                double z = cz + dz * len * f + (rnd.nextDouble() - 0.5) * 2 * jit;
+                event.renderer.line(px, py, pz, x, y, z, bolt);
+                px = x; py = y; pz = z;
+            }
+        }
     }
 
     private void printDebug() {
@@ -1111,7 +1296,7 @@ public class SusChunkFinderTest extends Module {
 
         Map<ChunkPos, Integer> chunks = best ? Map.<ChunkPos, Integer>of() : susChunks;
         if (!chunks.isEmpty()) {
-            double y = chunkY.get();
+            double y = baseY();
             double thickness = chunkThickness.get();
             int inset = chunkInset.get();
             SettingColor fill = chunkSideColor.get();
@@ -1184,7 +1369,7 @@ public class SusChunkFinderTest extends Module {
 
     private void renderMarkers(Render3DEvent event, List<double[]> pts) {
         MarkerStyle style = markerStyle.get();
-        double bottom = chunkY.get();
+        double bottom = baseY();
         double baseHalf = markerWidth.get() / 2.0;
         int glow = markerGlow.get();
         double t = (System.currentTimeMillis() % 100000L) / 1000.0 * markerSpeed.get();
@@ -1220,6 +1405,30 @@ public class SusChunkFinderTest extends Module {
             if (style == MarkerStyle.Outline) {
                 Color line = new Color(r, g, b, Math.max(120, alpha.get()));
                 event.renderer.box(cx - half, bottom, cz - half, cx + half, top, cz + half, line, line, ShapeMode.Lines, 0);
+                continue;
+            }
+
+            if (style == MarkerStyle.Lightning) {
+                // thin glowing core plus three crackling bolts that re-roll ~12 times a second
+                Color lcore = new Color(r, g, b, (int) (150 * pulse));
+                double lh = Math.max(0.2, half * 0.35);
+                event.renderer.box(cx - lh, bottom, cz - lh, cx + lh, top, cz + lh, lcore, lcore, ShapeMode.Sides, 0);
+
+                long slice = System.currentTimeMillis() / 80;
+                Color boltC = new Color(Math.min(255, r + 110), Math.min(255, g + 110), Math.min(255, b + 110), 235);
+                int segs = Math.max(8, (int) ((top - bottom) / 3));
+                double spread = half + 0.6;
+                for (int k = 0; k < 3; k++) {
+                    java.util.Random rnd = new java.util.Random(slice * 31L + k * 977L + (long) (cx * 13 + cz * 7));
+                    double px = cx, py = bottom, pz = cz;
+                    for (int sg = 1; sg <= segs; sg++) {
+                        double y2 = bottom + (top - bottom) * sg / segs;
+                        double x2 = sg == segs ? cx : cx + (rnd.nextDouble() - 0.5) * 2 * spread;
+                        double z2 = sg == segs ? cz : cz + (rnd.nextDouble() - 0.5) * 2 * spread;
+                        event.renderer.line(px, py, pz, x2, y2, z2, boltC);
+                        px = x2; py = y2; pz = z2;
+                    }
+                }
                 continue;
             }
 

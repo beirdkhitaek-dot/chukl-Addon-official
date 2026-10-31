@@ -30,3 +30,41 @@ jobs:
           path: |
             build/libs/*.jar
             !build/libs/*-sources.jar
+
+  # Automatic release: when a push to main builds successfully, publish it as a GitHub release.
+  # Title = "v<mod-version> - <update name>", where the update name is taken from the commit subject
+  # ("1.19.0 - Energy orb render" -> "Energy orb render"). The jar is attached as chukl-addon-<mod-version>.jar.
+  # If that version already has a release, nothing is published - bump mod-version to release again.
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: chukl-addon
+          path: dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          VERSION=$(grep '^mod-version' gradle/libs.versions.toml | sed 's/.*"\(.*\)".*/\1/')
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "v${VERSION} is already released - bump mod-version to publish a new release."
+            exit 0
+          fi
+          JAR=$(find dist -name "chukl-addon-${VERSION}.jar" | head -n 1)
+          test -n "$JAR"
+          SUBJECT=$(printf '%s' "$COMMIT_MSG" | head -n 1)
+          NAME=$(printf '%s' "$SUBJECT" | sed -E 's/^v?[0-9]+(\.[0-9]+)*[[:space:]]*[-:][[:space:]]*//')
+          if [ -z "$NAME" ]; then NAME="Update"; fi
+          gh release create "v${VERSION}" "$JAR" \
+            --target "$GITHUB_SHA" \
+            --title "v${VERSION} - ${NAME}" \
+            --notes "v${VERSION} - ${NAME}"

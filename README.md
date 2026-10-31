@@ -6,7 +6,7 @@ A Meteor Client addon for Minecraft 1.21.11 (Fabric).
 - **Deep Block Entity ESP** - highlights block entities below a Y level (default Y15), with per-block colors, tracers and a see-through-walls toggle.
 - **Dug Out Highlighter** - highlights big rectangular dug out areas underground, with a see-through-walls toggle.
 - **Sus Chunk Finder** - Krypton-style base finder using plant/amethyst growth and rotated deepslate. Zone pillar has selectable styles: Outline, Solid, Light Beam, Pulse Beam, Rainbow Beam (color, width, height, glow, speed).
-- **Sus Chunk Finder Test** (`sus-chunk-finder-test`) - experimental copy of the Sus Chunk Finder: draws only the best chunk(s) as a tall dig-down column with a dig shaft and beam, and scans Y29 to -64 for player-made blocks (storage, utility, redstone, lighting, building).
+- **Sus Chunk Finder Test** (`sus-chunk-finder-test`) - experimental copy of the Sus Chunk Finder: the best chunk is drawn as a glowing blue energy orb with electric arcs (or a dig-range column), with a dig shaft, a lightning/beam pillar, tracers and a selectable Y level (fixed or following you). Also scans Y29 to -64 for player-made blocks (storage, utility, redstone, lighting, building).
 - **Light Finder** - highlights underground light, which can reveal hidden bases.
 - **Water Sus Chunk** (`water-suschunk`) - Water Client's Sus Chunk Finder: amethyst clusters plus underground chests, with flashing base chunks.
 - **Vulxts Sus Chunk** (`vulxts-suschunk`) - Vulxts' Sus Chunk Finder: weighted amethyst/kelp/bamboo/berries/vines/dripstone scoring with smart zone merging.
