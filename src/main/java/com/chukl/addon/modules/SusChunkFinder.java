@@ -52,6 +52,8 @@ import java.util.function.Predicate;
 public class SusChunkFinder extends Module {
     private record ScanResult(int notGrown, boolean hasGrown, Set<BlockPos> deepslate) {}
 
+    public enum MarkerStyle { Outline, Solid, Light_Beam, Pulse_Beam, Rainbow_Beam }
+
     private record Zone(double centerX, double centerZ, int size, int maxHeat, int level) {}
 
     private record Opts(boolean kelp, boolean caveVines, boolean vines, boolean amethyst, boolean folia,
@@ -208,6 +210,64 @@ public class SusChunkFinder extends Module {
         .defaultValue(2)
         .range(0, 7)
         .sliderRange(0, 7)
+        .build()
+    );
+
+    private final Setting<MarkerStyle> markerStyle = sgRender.add(new EnumSetting.Builder<MarkerStyle>()
+        .name("marker-style")
+        .description("Look of the zone pillar. Outline = old thin lines, Solid = filled column, Light Beam = glowing beam of light, Pulse Beam = beam that breathes, Rainbow Beam = color-cycling beam.")
+        .defaultValue(MarkerStyle.Light_Beam)
+        .visible(() -> smartAdjustment.get() && zoneMarker.get())
+        .build()
+    );
+
+    private final Setting<SettingColor> markerColor = sgRender.add(new ColorSetting.Builder()
+        .name("marker-color")
+        .description("Color of the zone pillar (ignored by Rainbow Beam).")
+        .defaultValue(new SettingColor(255, 60, 60, 255))
+        .visible(() -> smartAdjustment.get() && zoneMarker.get() && markerStyle.get() != MarkerStyle.Rainbow_Beam)
+        .build()
+    );
+
+    private final Setting<Double> markerWidth = sgRender.add(new DoubleSetting.Builder()
+        .name("marker-width")
+        .description("Thickness of the pillar core in blocks. Bigger = easier to see from far away.")
+        .defaultValue(1.5)
+        .range(0.25, 16)
+        .sliderRange(0.25, 8)
+        .visible(() -> smartAdjustment.get() && zoneMarker.get())
+        .build()
+    );
+
+    private final Setting<Integer> markerHeight = sgRender.add(new IntSetting.Builder()
+        .name("marker-height")
+        .description("How tall the pillar is, in blocks above the chunk layer. Higher + brighter zones get extra height on top of this.")
+        .defaultValue(96)
+        .range(16, 384)
+        .sliderRange(16, 320)
+        .visible(() -> smartAdjustment.get() && zoneMarker.get())
+        .build()
+    );
+
+    private final Setting<Integer> markerGlow = sgRender.add(new IntSetting.Builder()
+        .name("marker-glow-layers")
+        .description("Soft glow layers around the beam (0 = none). Each layer is one extra box per zone, so keep it low on weak devices.")
+        .defaultValue(3)
+        .range(0, 5)
+        .sliderRange(0, 5)
+        .visible(() -> smartAdjustment.get() && zoneMarker.get()
+            && (markerStyle.get() == MarkerStyle.Light_Beam || markerStyle.get() == MarkerStyle.Pulse_Beam || markerStyle.get() == MarkerStyle.Rainbow_Beam))
+        .build()
+    );
+
+    private final Setting<Double> markerSpeed = sgRender.add(new DoubleSetting.Builder()
+        .name("marker-animation-speed")
+        .description("Speed of the pulse / rainbow animation.")
+        .defaultValue(1.0)
+        .range(0.1, 5)
+        .sliderRange(0.1, 3)
+        .visible(() -> smartAdjustment.get() && zoneMarker.get()
+            && (markerStyle.get() == MarkerStyle.Pulse_Beam || markerStyle.get() == MarkerStyle.Rainbow_Beam))
         .build()
     );
 
@@ -756,20 +816,7 @@ public class SusChunkFinder extends Module {
         }
 
         if (smartAdjustment.get() && zoneMarker.get()) {
-            SettingColor markerBase = chunkLineColor.get();
-            int view = mc.options.getViewDistance().getValue();
-            ChunkPos here = mc.player.getChunkPos();
-
-            for (Zone z : zones) {
-                if (Math.max(Math.abs((int) Math.floor(z.centerX() / 16) - here.x),
-                    Math.abs((int) Math.floor(z.centerZ() / 16) - here.z)) > view) continue;
-
-                double half = 0.5 + z.level();
-                Color marker = new Color(markerBase.r, markerBase.g, markerBase.b, Math.max(60, alpha.get()));
-                event.renderer.box(z.centerX() - half, chunkY.get(), z.centerZ() - half,
-                    z.centerX() + half, chunkY.get() + 24 + z.level() * 16, z.centerZ() + half,
-                    marker, marker, ShapeMode.Lines, 0);
-            }
+            renderMarkers(event);
         }
 
         if (rotatedDeepslate.get()) {
@@ -789,6 +836,70 @@ public class SusChunkFinder extends Module {
                 event.renderer.box(pos, color, color, ShapeMode.Lines, 0);
 
                 if (++drawn >= 500) break; // keeps weak devices smooth
+            }
+        }
+    }
+
+    private void renderMarkers(Render3DEvent event) {
+        MarkerStyle style = markerStyle.get();
+        int view = mc.options.getViewDistance().getValue();
+        ChunkPos here = mc.player.getChunkPos();
+        double bottom = chunkY.get();
+        double baseHalf = markerWidth.get() / 2.0;
+        int glow = markerGlow.get();
+        double t = (System.currentTimeMillis() % 100000L) / 1000.0 * markerSpeed.get();
+
+        SettingColor mc0 = markerColor.get();
+        int r = mc0.r, g = mc0.g, b = mc0.b;
+        if (style == MarkerStyle.Rainbow_Beam) {
+            double hue = (t * 0.15) % 1.0;
+            // plain HSV->RGB (no java.awt, so it is safe on Android/Zalith)
+            double h6 = hue * 6.0;
+            int sector = (int) h6;
+            double f = h6 - sector;
+            int v = 255, p0 = (int) (255 * 0.15), q = (int) (255 * (1 - 0.85 * f)), t2 = (int) (255 * (1 - 0.85 * (1 - f)));
+            switch (sector % 6) {
+                case 0 -> { r = v; g = t2; b = p0; }
+                case 1 -> { r = q; g = v; b = p0; }
+                case 2 -> { r = p0; g = v; b = t2; }
+                case 3 -> { r = p0; g = q; b = v; }
+                case 4 -> { r = t2; g = p0; b = v; }
+                default -> { r = v; g = p0; b = q; }
+            }
+        }
+
+        // Pulse breathes between 55% and 100% brightness
+        double pulse = (style == MarkerStyle.Pulse_Beam) ? 0.775 + 0.225 * Math.sin(t * 3.0) : 1.0;
+
+        for (Zone z : zones) {
+            if (Math.max(Math.abs((int) Math.floor(z.centerX() / 16) - here.x),
+                Math.abs((int) Math.floor(z.centerZ() / 16) - here.z)) > view) continue;
+
+            double top = bottom + markerHeight.get() + z.level() * 16;
+            double half = baseHalf + z.level() * 0.25; // stronger zones get a fatter pillar
+            double cx = z.centerX(), cz = z.centerZ();
+
+            if (style == MarkerStyle.Outline) {
+                Color line = new Color(r, g, b, Math.max(120, alpha.get()));
+                event.renderer.box(cx - half, bottom, cz - half, cx + half, top, cz + half, line, line, ShapeMode.Lines, 0);
+                continue;
+            }
+
+            // Bright core
+            int coreA = (int) Math.min(255, (style == MarkerStyle.Solid ? 170 : 230) * pulse);
+            Color core = new Color(r, g, b, coreA);
+            event.renderer.box(cx - half, bottom, cz - half, cx + half, top, cz + half,
+                core, new Color(255, 255, 255, (int) (200 * pulse)),
+                style == MarkerStyle.Solid ? ShapeMode.Both : ShapeMode.Sides, 0);
+
+            if (style == MarkerStyle.Solid) continue;
+
+            // Soft glow halos: wider, fainter boxes layered around the core
+            for (int i = 1; i <= glow; i++) {
+                double h = half + i * (0.35 + baseHalf * 0.5);
+                int a = (int) (Math.max(6, 90 / (i + 0.5)) * pulse);
+                Color halo = new Color(r, g, b, a);
+                event.renderer.box(cx - h, bottom, cz - h, cx + h, top, cz + h, halo, halo, ShapeMode.Sides, 0);
             }
         }
     }
