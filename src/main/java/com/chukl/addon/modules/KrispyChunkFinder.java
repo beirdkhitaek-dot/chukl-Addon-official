@@ -17,7 +17,6 @@ import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.systems.modules.misc.AutoReconnect;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.client.sound.PositionedSoundInstance;
 import net.minecraft.client.toast.SystemToast;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.network.packet.Packet;
@@ -370,7 +369,7 @@ public class KrispyChunkFinder extends Module {
 
         if (soundPing.get()) {
             float volume = (float) (soundVolume.get() / 100.0);
-            mc.getSoundManager().play(PositionedSoundInstance.ui(PING, 1.0F, volume));
+            if (mc.player != null) mc.player.playSound(PING, volume, 1.0F);
         }
 
         if (kickOnFlag.get() && mc.getNetworkHandler() != null) {
