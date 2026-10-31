@@ -66,6 +66,11 @@ public class SusChunkFinderTest extends Module {
 
     public enum ServerProfile { Auto, Standard, DonutFolia }
 
+    public enum EspScope { Best_Chunks, Flagged_Chunks, All_Chunks }
+
+    /** The brightest lit blocks of one chunk, for the light ESP: x,y,z triplets and their block light level. */
+    private record LitCells(int[] xyz, byte[] lvl) {}
+
     private record Zone(double centerX, double centerZ, int size, int maxHeat, int level) {}
 
     private record Opts(boolean kelp, boolean caveVines, boolean vines, boolean amethyst, boolean folia,
@@ -76,6 +81,7 @@ public class SusChunkFinderTest extends Module {
     private final SettingGroup sgRender = settings.createGroup("Render");
     private final SettingGroup sgUg = settings.createGroup("Underground");
     private final SettingGroup sgAdapt = settings.createGroup("Adaptive");
+    private final SettingGroup sgLight = settings.createGroup("Light (experimental)");
 
     // --- General (same list and order as Krypton) ---
 
@@ -452,6 +458,98 @@ public class SusChunkFinderTest extends Module {
         .build()
     );
 
+    // --- Test: light ESP + deep light signal (experimental) ---
+
+    private final Setting<Boolean> lightEsp = sgLight.add(new BoolSetting.Builder()
+        .name("light-esp")
+        .description("EXPERIMENTAL: draws the lit blocks underground as colored boxes (brighter light = brighter box), so torches, lanterns and lamps of a hidden base stand out. Only the brightest blocks of each chunk are kept, and only the chunks of the chosen scope are drawn, so it stays light on weak devices. Overworld only.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<EspScope> espScope = sgLight.add(new EnumSetting.Builder<EspScope>()
+        .name("scope")
+        .description("Best Chunks = only the chunk(s) the module picked. Flagged Chunks = every flagged chunk. All Chunks = every loaded chunk that has lit blocks (nearest first).")
+        .defaultValue(EspScope.Best_Chunks)
+        .visible(lightEsp::get)
+        .build()
+    );
+
+    private final Setting<Integer> espMinLight = sgLight.add(new IntSetting.Builder()
+        .name("min-light-level")
+        .description("Lowest block light level that is drawn. 1 = everything lit, higher = only blocks close to a light source.")
+        .defaultValue(1)
+        .range(1, 15)
+        .sliderRange(1, 15)
+        .visible(lightEsp::get)
+        .build()
+    );
+
+    private final Setting<SettingColor> espColor = sgLight.add(new ColorSetting.Builder()
+        .name("light-color")
+        .description("Color of the brightest light. Dimmer light fades toward dark.")
+        .defaultValue(new SettingColor(255, 255, 0, 255))
+        .visible(lightEsp::get)
+        .build()
+    );
+
+    private final Setting<Integer> espAlpha = sgLight.add(new IntSetting.Builder()
+        .name("light-alpha")
+        .description("Opacity of the light boxes.")
+        .defaultValue(80)
+        .range(1, 255)
+        .sliderRange(1, 255)
+        .visible(lightEsp::get)
+        .build()
+    );
+
+    private final Setting<Integer> espMaxBoxes = sgLight.add(new IntSetting.Builder()
+        .name("max-boxes")
+        .description("Most light boxes drawn at once (nearest chunks first). Lower = smoother on weak devices.")
+        .defaultValue(400)
+        .range(50, 3000)
+        .sliderRange(50, 1500)
+        .visible(lightEsp::get)
+        .build()
+    );
+
+    private final Setting<Boolean> deepSignal = sgLight.add(new BoolSetting.Builder()
+        .name("deep-light-signal")
+        .description("EXPERIMENTAL: counts lit blocks in the deep range as underground evidence. Very little is lit down there naturally, so a few lit blocks point to torches or lamps. Chunks within one chunk of lava are skipped, because lava lights its surroundings by itself. Overworld only.")
+        .defaultValue(false)
+        .build()
+    );
+
+    private final Setting<Integer> deepMinLight = sgLight.add(new IntSetting.Builder()
+        .name("deep-min-light")
+        .description("Block light level a deep block needs to count. About 6 lit blocks = 1 point toward the underground threshold (up to 40).")
+        .defaultValue(8)
+        .range(1, 15)
+        .sliderRange(1, 15)
+        .visible(deepSignal::get)
+        .build()
+    );
+
+    private final Setting<Integer> deepMinY = sgLight.add(new IntSetting.Builder()
+        .name("deep-min-y")
+        .description("Bottom of the Y range used by the light ESP and the deep light signal.")
+        .defaultValue(-63)
+        .range(-64, 320)
+        .sliderRange(-64, 64)
+        .visible(() -> lightEsp.get() || deepSignal.get())
+        .build()
+    );
+
+    private final Setting<Integer> deepMaxY = sgLight.add(new IntSetting.Builder()
+        .name("deep-max-y")
+        .description("Top of the Y range used by the light ESP and the deep light signal.")
+        .defaultValue(-30)
+        .range(-64, 320)
+        .sliderRange(-64, 64)
+        .visible(() -> lightEsp.get() || deepSignal.get())
+        .build()
+    );
+
     // --- Test: underground detection ---
 
     private final Setting<Boolean> ugDetect = sgUg.add(new BoolSetting.Builder()
@@ -611,6 +709,9 @@ public class SusChunkFinderTest extends Module {
     private final Set<ChunkPos> lightChecked = ConcurrentHashMap.newKeySet();
     private final Map<ChunkPos, Integer> lightScores = new ConcurrentHashMap<>();
     private volatile Set<ChunkPos> naturalZone = Set.of();
+    private final Map<ChunkPos, Integer> deepScores = new ConcurrentHashMap<>();
+    private final Set<ChunkPos> lavaChunks = ConcurrentHashMap.newKeySet();
+    private final Map<ChunkPos, LitCells> litCells = new ConcurrentHashMap<>();
     private int observedRadius = -1;
     private long observedChangedAt;
     private int sensOffset;
@@ -729,7 +830,8 @@ public class SusChunkFinderTest extends Module {
     private int ugSignature() {
         return java.util.Objects.hash(ugDetect.get(), ugMinY.get(), ugMaxY.get(), ugStorage.get(), ugUtility.get(),
             ugRedstone.get(), ugLighting.get(), ugBuilding.get(), ignoreNatural.get(), lightBox.get(), lightMin.get(),
-            boxMinSize.get(), boxShape.get(), boxLayers.get());
+            boxMinSize.get(), boxShape.get(), boxLayers.get(), lightEsp.get(), espMinLight.get(), deepSignal.get(),
+            deepMinLight.get(), deepMinY.get(), deepMaxY.get());
     }
 
     private volatile Map<ChunkPos, Integer> susChunks = Map.of();
@@ -809,6 +911,9 @@ public class SusChunkFinderTest extends Module {
         scannedAt.clear();
         lightChecked.clear();
         lightScores.clear();
+        deepScores.clear();
+        lavaChunks.clear();
+        litCells.clear();
         naturalZone = Set.of();
         observedRadius = -1;
         observedChangedAt = System.currentTimeMillis();
@@ -976,6 +1081,9 @@ public class SusChunkFinderTest extends Module {
         natMask.remove(cp);
         lightScores.remove(cp);
         lightChecked.remove(cp);
+        deepScores.remove(cp);
+        lavaChunks.remove(cp);
+        litCells.remove(cp);
 
         if (prevGrowth > 0) {
             forEachNeighbor(cp, prevSim, n -> heatmap.compute(n, (k, v) -> {
@@ -1249,7 +1357,7 @@ public class SusChunkFinderTest extends Module {
         naturalZone = zone;
 
         // underground light: analyse a chunk a few seconds after it was scanned, once its light data has arrived
-        if (lightBox.get() && isOverworld(world)) {
+        if ((lightBox.get() || lightEsp.get() || deepSignal.get()) && isOverworld(world)) {
             long now = System.currentTimeMillis();
             int budget = 4;
             for (Map.Entry<ChunkPos, Long> e : scannedAt.entrySet()) {
@@ -1267,10 +1375,11 @@ public class SusChunkFinderTest extends Module {
         scannedAt.keySet().removeIf(c -> !seenChunks.containsKey(c));
 
         Set<ChunkPos> ugStrong = new HashSet<>();
-        if ((ugDetect.get() || lightBox.get()) && ugFlagsChunks.get()) {
+        if ((ugDetect.get() || lightBox.get() || deepSignal.get()) && ugFlagsChunks.get()) {
             int thr = ugThreshold.get();
             Set<ChunkPos> keys = new HashSet<>(ugScores.keySet());
             keys.addAll(lightScores.keySet());
+            keys.addAll(deepScores.keySet());
             for (ChunkPos pos : keys) {
                 int score = effUg(pos);
                 if (score < thr) continue;
@@ -1369,24 +1478,39 @@ public class SusChunkFinderTest extends Module {
      * Inside (or next to) a natural structure it counts for nothing, unless it is far above the threshold.
      */
     private int effUg(ChunkPos c) {
-        int score = ugScores.getOrDefault(c, 0) + lightScores.getOrDefault(c, 0);
+        int deep = deepScores.getOrDefault(c, 0);
+        if (deep > 0 && lavaNear(c)) deep = 0; // lava lights its surroundings by itself
+        int score = ugScores.getOrDefault(c, 0) + lightScores.getOrDefault(c, 0) + deep;
         if (score <= 0) return 0;
         if (ignoreNatural.get() && naturalZone.contains(c) && score < ugThreshold.get() * 3) return 0;
         return score;
     }
 
+    private boolean lavaNear(ChunkPos c) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (lavaChunks.contains(new ChunkPos(c.x + dx, c.z + dz))) return true;
+            }
+        }
+        return false;
+    }
+
+    private record LightOpts(boolean box, int minLight, int minSize, int ratio, int minLayers, int ugMin, int ugMax,
+                             boolean esp, int espMin, boolean deep, int deepMin, int deepMinY, int deepMaxY) {}
+
     private void queueLight(ClientWorld world, WorldChunk chunk) {
         ExecutorService[] pool = executors;
         if (pool == null) return;
 
-        int minY = Math.min(ugMinY.get(), ugMaxY.get());
-        int maxY = Math.max(ugMinY.get(), ugMaxY.get());
-        int minLight = lightMin.get(), minSize = boxMinSize.get(), ratio = boxShape.get(), minLayers = boxLayers.get();
+        LightOpts o = new LightOpts(lightBox.get(), lightMin.get(), boxMinSize.get(), boxShape.get(), boxLayers.get(),
+            Math.min(ugMinY.get(), ugMaxY.get()), Math.max(ugMinY.get(), ugMaxY.get()),
+            lightEsp.get(), espMinLight.get(), deepSignal.get(), deepMinLight.get(),
+            Math.min(deepMinY.get(), deepMaxY.get()), Math.max(deepMinY.get(), deepMaxY.get()));
 
         ChunkPos pos = chunk.getPos();
         pool[Math.floorMod(pos.x * 31 + pos.z, pool.length)].execute(() -> {
             try {
-                lightScan(world, chunk, minY, maxY, minLight, minSize, ratio, minLayers);
+                lightScan(world, chunk, o);
             } catch (Throwable t) {
                 ChuklAddon.LOG.error("Sus Chunk Finder Test light scan failed", t);
             }
@@ -1394,52 +1518,121 @@ public class SusChunkFinderTest extends Module {
     }
 
     /**
-     * Looks at the block light of every Y level in the dig range. On a level where the lit cells are mostly one
-     * clean rectangle (a sealed, lit room), that level counts as a box layer. Natural caves are lit as blobs.
+     * One pass over the block light of the chunk. From it we get:
+     * - box layers: levels where the lit cells are mostly one clean rectangle (a sealed, lit room),
+     * - the deep light signal: how many blocks in the deep range are lit (and whether lava is the reason),
+     * - the light ESP cells: the brightest lit blocks of the deep range.
      */
-    private void lightScan(ClientWorld world, WorldChunk chunk, int minY, int maxY, int minLight, int minSize, int ratioPct, int minLayers) {
+    private void lightScan(ClientWorld world, WorldChunk chunk, LightOpts o) {
         if (world != mc.world) return;
 
+        int lo = Integer.MAX_VALUE, hi = Integer.MIN_VALUE;
+        if (o.box()) {
+            lo = Math.min(lo, o.ugMin());
+            hi = Math.max(hi, o.ugMax());
+        }
+        if (o.esp() || o.deep()) {
+            lo = Math.min(lo, o.deepMinY());
+            hi = Math.max(hi, o.deepMaxY());
+        }
+        if (lo > hi) return;
+
         ChunkPos cp = chunk.getPos();
+        int startX = cp.getStartX(), startZ = cp.getStartZ();
         BlockPos.Mutable m = new BlockPos.Mutable();
         boolean[][] lit = new boolean[16][16];
+
         int layers = 0;
         long sumX = 0, sumZ = 0, cells = 0;
+        int deepCells = 0;
+        boolean lava = false;
 
-        for (int y = Math.max(minY, -64); y <= Math.min(maxY, 319); y++) {
+        final int cap = 256;
+        int[][] bucket = o.esp() ? new int[16][cap * 3] : null;
+        int[] bucketCount = new int[16];
+
+        for (int y = Math.max(lo, -64); y <= Math.min(hi, 319); y++) {
+            boolean inBox = o.box() && y >= o.ugMin() && y <= o.ugMax();
+            boolean inDeep = (o.esp() || o.deep()) && y >= o.deepMinY() && y <= o.deepMaxY();
+
             int n = 0;
             for (int x = 0; x < 16; x++) {
                 for (int z = 0; z < 16; z++) {
-                    boolean on = world.getLightLevel(LightType.BLOCK, m.set(cp.getStartX() + x, y, cp.getStartZ() + z)) >= minLight;
-                    lit[x][z] = on;
-                    if (on) n++;
+                    int l = world.getLightLevel(LightType.BLOCK, m.set(startX + x, y, startZ + z));
+
+                    if (inBox) {
+                        boolean on = l >= o.minLight();
+                        lit[x][z] = on;
+                        if (on) n++;
+                    }
+
+                    if (inDeep && l > 0) {
+                        if (o.deep()) {
+                            if (l >= o.deepMin()) deepCells++;
+                            if (!lava && l >= 15 && world.getBlockState(m).isOf(Blocks.LAVA)) lava = true;
+                        }
+                        if (o.esp() && l >= o.espMin() && bucketCount[l] < cap) {
+                            int k = bucketCount[l]++;
+                            bucket[l][k * 3] = startX + x;
+                            bucket[l][k * 3 + 1] = y;
+                            bucket[l][k * 3 + 2] = startZ + z;
+                        }
+                    }
                 }
             }
 
             // too little light = nothing to see, nearly the whole chunk lit = lava lake or open cavern, not a room
-            if (n < minSize * minSize || n > 200) continue;
+            if (!inBox || n < o.minSize() * o.minSize() || n > 200) continue;
 
             int[] rect = maxRect(lit); // {area, width, depth} of the biggest fully lit rectangle
-            if (rect[1] < minSize || rect[2] < minSize) continue;
-            if (rect[0] * 100 < n * ratioPct) continue;
+            if (rect[1] < o.minSize() || rect[2] < o.minSize()) continue;
+            if (rect[0] * 100 < n * o.ratio()) continue;
 
             layers++;
             for (int x = 0; x < 16; x++) {
                 for (int z = 0; z < 16; z++) {
                     if (!lit[x][z]) continue;
-                    sumX += cp.getStartX() + x;
-                    sumZ += cp.getStartZ() + z;
+                    sumX += startX + x;
+                    sumZ += startZ + z;
                     cells++;
                 }
             }
         }
 
-        int score = layers >= minLayers ? Math.min(60, layers * 5) : 0;
-        if (score > 0 && cells > 0) {
-            lightScores.put(cp, score);
+        // box-shaped lit rooms
+        int boxScore = o.box() && layers >= o.minLayers() ? Math.min(60, layers * 5) : 0;
+        if (boxScore > 0 && cells > 0) {
+            lightScores.put(cp, boxScore);
             ugTargets.putIfAbsent(cp, new BlockPos((int) (sumX / cells), 0, (int) (sumZ / cells)));
         } else {
             lightScores.remove(cp);
+        }
+
+        // deep light signal
+        int deepScore = o.deep() ? Math.min(40, deepCells / 6) : 0;
+        if (deepScore > 0) deepScores.put(cp, deepScore);
+        else deepScores.remove(cp);
+        if (o.deep()) {
+            if (lava) lavaChunks.add(cp);
+            else lavaChunks.remove(cp);
+        }
+
+        // light ESP: keep the brightest cells, up to the cap
+        if (o.esp()) {
+            int[] xyz = new int[cap * 3];
+            byte[] lv = new byte[cap];
+            int k = 0;
+            for (int l = 15; l >= 1 && k < cap; l--) {
+                for (int i = 0; i < bucketCount[l] && k < cap; i++) {
+                    xyz[k * 3] = bucket[l][i * 3];
+                    xyz[k * 3 + 1] = bucket[l][i * 3 + 1];
+                    xyz[k * 3 + 2] = bucket[l][i * 3 + 2];
+                    lv[k] = (byte) l;
+                    k++;
+                }
+            }
+            if (k > 0) litCells.put(cp, new LitCells(java.util.Arrays.copyOf(xyz, k * 3), java.util.Arrays.copyOf(lv, k)));
+            else litCells.remove(cp);
         }
     }
 
@@ -1517,6 +1710,55 @@ public class SusChunkFinderTest extends Module {
     private BlockPos digTarget(ChunkPos c) {
         BlockPos t = ugTargets.get(c);
         return t != null ? t : new BlockPos(c.getStartX() + 8, 0, c.getStartZ() + 8);
+    }
+
+    /** Light ESP: boxes on the brightest lit blocks, colored by light level (bright = full color, dim = dark). */
+    private void renderLightEsp(Render3DEvent event) {
+        if (litCells.isEmpty()) return;
+
+        ChunkPos here = mc.player.getChunkPos();
+        List<ChunkPos> chunks;
+        switch (espScope.get()) {
+            case Best_Chunks:
+                chunks = new ArrayList<>(bestChunks);
+                break;
+            case Flagged_Chunks:
+                chunks = new ArrayList<>(susChunks.keySet());
+                break;
+            default:
+                chunks = new ArrayList<>(litCells.keySet());
+                break;
+        }
+        if (espScope.get() != EspScope.Best_Chunks) {
+            chunks.sort(java.util.Comparator.comparingInt((ChunkPos c) ->
+                (c.x - here.x) * (c.x - here.x) + (c.z - here.z) * (c.z - here.z)));
+        }
+
+        SettingColor base = espColor.get();
+        int a = Math.max(1, Math.min(255, espAlpha.get()));
+        int cap = espMaxBoxes.get();
+        int drawn = 0;
+
+        for (ChunkPos cp : chunks) {
+            LitCells cells = litCells.get(cp);
+            if (cells == null) continue;
+
+            for (int i = 0; i < cells.lvl().length; i++) {
+                if (drawn >= cap) return;
+
+                double t = Math.max(0.0, Math.min(1.0, (cells.lvl()[i] - 1) / 14.0));
+                Color c = new Color(
+                    (int) Math.round((base.r - 19) * t + 19),
+                    (int) Math.round((base.g - 19) * t + 19),
+                    (int) Math.round((base.b - 50) * t + 50),
+                    a
+                );
+
+                int x = cells.xyz()[i * 3], y = cells.xyz()[i * 3 + 1], z = cells.xyz()[i * 3 + 2];
+                event.renderer.box(x, y, z, x + 1, y + 1, z + 1, c, c, ShapeMode.Sides, 0);
+                drawn++;
+            }
+        }
     }
 
     private void renderBest(Render3DEvent event) {
@@ -1677,6 +1919,7 @@ public class SusChunkFinderTest extends Module {
 
         boolean best = renderMode.get() == RenderMode.Best_Chunks;
         if (best) renderBest(event);
+        if (lightEsp.get()) renderLightEsp(event);
 
         Map<ChunkPos, Integer> chunks = best ? Map.<ChunkPos, Integer>of() : susChunks;
         if (!chunks.isEmpty()) {
