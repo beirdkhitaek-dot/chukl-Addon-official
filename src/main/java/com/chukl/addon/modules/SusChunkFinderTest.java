@@ -26,6 +26,8 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.world.chunk.ChunkSection;
+import net.minecraft.world.LightType;
+import net.minecraft.world.World;
 import net.minecraft.world.chunk.WorldChunk;
 
 import java.util.ArrayDeque;
@@ -52,7 +54,7 @@ import java.util.function.Predicate;
  * interesting are skipped, and the sus list refreshes every other tick.
  */
 public class SusChunkFinderTest extends Module {
-    private record ScanResult(int notGrown, boolean hasGrown, Set<BlockPos> deepslate, int ugScore, int ugX, int ugZ) {}
+    private record ScanResult(int notGrown, boolean hasGrown, Set<BlockPos> deepslate, int ugScore, int ugX, int ugZ, int natMask) {}
 
     public enum RenderMode { Best_Chunks, All_Chunks }
 
@@ -66,7 +68,7 @@ public class SusChunkFinderTest extends Module {
 
     private record Opts(boolean kelp, boolean caveVines, boolean vines, boolean amethyst, boolean folia,
                         boolean bamboo, boolean cocoa, boolean beeNest, boolean deepslate,
-                        Map<Block, Integer> ug, int ugMin, int ugMax) {}
+                        Map<Block, Integer> ug, int ugMin, int ugMax, Map<Block, Integer> nat) {}
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgRender = settings.createGroup("Render");
@@ -451,6 +453,60 @@ public class SusChunkFinderTest extends Module {
         .build()
     );
 
+    private final Setting<Boolean> ignoreNatural = sgUg.add(new BoolSetting.Builder()
+        .name("ignore-natural-structures")
+        .description("Ignore underground evidence inside natural structures (mineshafts, strongholds, dungeons, ancient cities, trial chambers, amethyst geodes) and the chunks right next to them, so their chests, spawners, torches and rails do not flag a chunk. A chunk with three times the threshold is still flagged, in case a base sits inside one. Overworld only.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Boolean> lightBox = sgUg.add(new BoolSetting.Builder()
+        .name("light-box-detection")
+        .description("Check the underground light data for lit areas shaped like a box. A sealed room with torches or lamps is lit as a clean rectangle, a natural cave is lit as an irregular blob. Rooms with a doorway still count. Overworld only.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Integer> lightMin = sgUg.add(new IntSetting.Builder()
+        .name("min-light")
+        .description("Block light level that counts as lit. 1 = anything lit at all.")
+        .defaultValue(1)
+        .range(1, 14)
+        .sliderRange(1, 14)
+        .visible(lightBox::get)
+        .build()
+    );
+
+    private final Setting<Integer> boxMinSize = sgUg.add(new IntSetting.Builder()
+        .name("box-min-size")
+        .description("Smallest width and depth, in blocks, of a lit rectangle that counts as a box.")
+        .defaultValue(3)
+        .range(2, 12)
+        .sliderRange(2, 10)
+        .visible(lightBox::get)
+        .build()
+    );
+
+    private final Setting<Integer> boxShape = sgUg.add(new IntSetting.Builder()
+        .name("box-shape-match")
+        .description("How much of a lit area has to be one clean rectangle, in percent. Higher = stricter, fewer false positives.")
+        .defaultValue(75)
+        .range(50, 100)
+        .sliderRange(50, 100)
+        .visible(lightBox::get)
+        .build()
+    );
+
+    private final Setting<Integer> boxLayers = sgUg.add(new IntSetting.Builder()
+        .name("box-min-layers")
+        .description("How many Y levels in a row-ish the box shape must show up on (a room is usually 3 or 4 blocks tall). Each level is worth 5 points toward the threshold.")
+        .defaultValue(2)
+        .range(1, 10)
+        .sliderRange(1, 8)
+        .visible(lightBox::get)
+        .build()
+    );
+
     private final Setting<Boolean> ugStorage = sgUg.add(new BoolSetting.Builder()
         .name("storage")
         .description("Chests, trapped chests, barrels, ender chests, shulker boxes.")
@@ -504,6 +560,11 @@ public class SusChunkFinderTest extends Module {
     private final Map<ChunkPos, Integer> ugScores = new ConcurrentHashMap<>();
     private final Map<ChunkPos, BlockPos> ugTargets = new ConcurrentHashMap<>();
     private volatile Set<ChunkPos> ugFlagged = Set.of();
+    private final Map<ChunkPos, Integer> natMask = new ConcurrentHashMap<>();
+    private final Map<ChunkPos, Long> scannedAt = new ConcurrentHashMap<>();
+    private final Set<ChunkPos> lightChecked = ConcurrentHashMap.newKeySet();
+    private final Map<ChunkPos, Integer> lightScores = new ConcurrentHashMap<>();
+    private volatile Set<ChunkPos> naturalZone = Set.of();
     private volatile List<ChunkPos> bestChunks = List.of();
     private ChunkPos lastAnnounced;
     private int lastUgSig;
@@ -513,6 +574,44 @@ public class SusChunkFinderTest extends Module {
     // ---- underground block table (built once from the block registry) ----
     private static final int[] UG_WEIGHTS = {3, 2, 2, 1, 1}; // storage, utility, redstone, lighting, building
     private static Map<Block, int[]> ugInfo;
+
+    // ---- natural structure signature blocks: mineshaft, stronghold, dungeon, ancient city, trial chamber, geode ----
+    private static final int[] NAT_THRESH = {10, 8, 8, 10, 1, 10};
+    private static Map<Block, Integer> natInfo;
+
+    private static int natGroupOf(String p) {
+        switch (p) {
+            case "rail": case "oak_fence": case "dark_oak_fence": case "cobweb":
+                return 0;
+            case "mossy_stone_bricks": case "cracked_stone_bricks": case "chiseled_stone_bricks":
+            case "end_portal_frame": case "end_portal":
+                return 1;
+            case "mossy_cobblestone": case "spawner":
+                return 2;
+            case "sculk": case "sculk_vein": case "sculk_sensor": case "calibrated_sculk_sensor":
+            case "sculk_shrieker": case "sculk_catalyst": case "reinforced_deepslate":
+                return 3;
+            case "trial_spawner": case "vault":
+                return 4;
+            case "amethyst_block": case "budding_amethyst": case "amethyst_cluster":
+            case "small_amethyst_bud": case "medium_amethyst_bud": case "large_amethyst_bud":
+                return 5;
+            default:
+                if (p.startsWith("infested_") && p.contains("stone_bricks")) return 1;
+                return -1;
+        }
+    }
+
+    private static synchronized Map<Block, Integer> natInfo() {
+        if (natInfo != null) return natInfo;
+        Map<Block, Integer> m = new java.util.HashMap<>();
+        for (Block b : Registries.BLOCK) {
+            int g = natGroupOf(Registries.BLOCK.getId(b).getPath());
+            if (g >= 0) m.put(b, g);
+        }
+        natInfo = m;
+        return m;
+    }
 
     private static int ugGroupOf(String p) {
         switch (p) {
@@ -577,7 +676,8 @@ public class SusChunkFinderTest extends Module {
     /** Changes whenever a setting that affects scanning changes, so every loaded chunk gets scanned again. */
     private int ugSignature() {
         return java.util.Objects.hash(ugDetect.get(), ugMinY.get(), ugMaxY.get(), ugStorage.get(), ugUtility.get(),
-            ugRedstone.get(), ugLighting.get(), ugBuilding.get());
+            ugRedstone.get(), ugLighting.get(), ugBuilding.get(), ignoreNatural.get(), lightBox.get(), lightMin.get(),
+            boxMinSize.get(), boxShape.get(), boxLayers.get());
     }
 
     private volatile Map<ChunkPos, Integer> susChunks = Map.of();
@@ -653,6 +753,11 @@ public class SusChunkFinderTest extends Module {
         deepslateBlocks = List.of();
         ugScores.clear();
         ugTargets.clear();
+        natMask.clear();
+        scannedAt.clear();
+        lightChecked.clear();
+        lightScores.clear();
+        naturalZone = Set.of();
         ugFlagged = Set.of();
         bestChunks = List.of();
         lastAnnounced = null;
@@ -669,7 +774,8 @@ public class SusChunkFinderTest extends Module {
     private Opts opts() {
         return new Opts(kelp.get(), caveVines.get(), vines.get(), amethyst.get(), amethyst.get() && isDonutFolia(),
             bamboo.get(), cocoa.get(), beeNest.get(), rotatedDeepslate.get(),
-            ugBlocks(), Math.min(ugMinY.get(), ugMaxY.get()), Math.max(ugMinY.get(), ugMaxY.get()));
+            isOverworld(mc.world) ? ugBlocks() : Map.of(), Math.min(ugMinY.get(), ugMaxY.get()), Math.max(ugMinY.get(), ugMaxY.get()),
+            isOverworld(mc.world) && ignoreNatural.get() ? natInfo() : Map.of());
     }
 
     private int effectiveSimDist() {
@@ -752,6 +858,9 @@ public class SusChunkFinderTest extends Module {
         Set<BlockPos> prevDeepslate = chunkDeepslate.remove(cp);
         ugScores.remove(cp);
         ugTargets.remove(cp);
+        natMask.remove(cp);
+        lightScores.remove(cp);
+        lightChecked.remove(cp);
 
         if (prevGrowth > 0) {
             forEachNeighbor(cp, prevSim, n -> heatmap.compute(n, (k, v) -> {
@@ -782,6 +891,9 @@ public class SusChunkFinderTest extends Module {
             chunkDeepslate.put(cp, result.deepslate());
             deepslateSet.addAll(result.deepslate());
         }
+
+        if (result.natMask() != 0) natMask.put(cp, result.natMask());
+        scannedAt.put(cp, System.currentTimeMillis());
 
         if (result.ugScore() > 0) {
             ugScores.put(cp, result.ugScore());
@@ -819,6 +931,9 @@ public class SusChunkFinderTest extends Module {
         Predicate<BlockState> deepslateFilter = s -> s.getBlock() == Blocks.DEEPSLATE;
         Map<Block, Integer> ug = o.ug();
         Predicate<BlockState> ugFilter = s -> ug.containsKey(s.getBlock());
+        Map<Block, Integer> nat = o.nat();
+        Predicate<BlockState> natFilter = s -> nat.containsKey(s.getBlock());
+        int[] natCnt = new int[6];
 
         int notGrown = 0;
         int grown = 0;
@@ -849,7 +964,11 @@ public class SusChunkFinderTest extends Module {
                 && sectionMinY + 15 >= o.ugMin() && sectionMinY <= o.ugMax()
                 && section.hasAny(ugFilter);
 
-            if (!scanGrowth && !scanDeepslate && !scanUg) continue;
+            boolean scanNat = !nat.isEmpty()
+                && sectionMinY + 15 >= -64 && sectionMinY <= 80
+                && section.hasAny(natFilter);
+
+            if (!scanGrowth && !scanDeepslate && !scanUg && !scanNat) continue;
 
             for (int x = 0; x < 16; x++) {
                 for (int y = 0; y < 16; y++) {
@@ -911,6 +1030,11 @@ public class SusChunkFinderTest extends Module {
                             }
                         }
 
+                        if (scanNat) {
+                            Integer ng = nat.get(block);
+                            if (ng != null) natCnt[ng]++;
+                        }
+
                         if (scanUg && by >= o.ugMin() && by <= o.ugMax()) {
                             Integer w = ug.get(block);
                             if (w != null) {
@@ -944,7 +1068,11 @@ public class SusChunkFinderTest extends Module {
 
         int ugX = ugScore > 0 ? (int) Math.round(ugSumX / (double) ugScore) : 0;
         int ugZ = ugScore > 0 ? (int) Math.round(ugSumZ / (double) ugScore) : 0;
-        return new ScanResult(notGrown, grown > 0, deepslate, Math.min(ugScore, 200), ugX, ugZ);
+        int mask = 0;
+        for (int g = 0; g < natCnt.length; g++) {
+            if (natCnt[g] >= NAT_THRESH[g]) mask |= 1 << g;
+        }
+        return new ScanResult(notGrown, grown > 0, deepslate, Math.min(ugScore, 200), ugX, ugZ, mask);
     }
 
     // ---------- main thread ----------
@@ -991,14 +1119,45 @@ public class SusChunkFinderTest extends Module {
 
             if (neighbors >= 3) sus.put(pos, entry.getValue());
         }
+        // chunks that belong to (or touch) a natural structure
+        Set<ChunkPos> zone = new HashSet<>();
+        if (ignoreNatural.get()) {
+            for (ChunkPos c : natMask.keySet()) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dz = -1; dz <= 1; dz++) zone.add(new ChunkPos(c.x + dx, c.z + dz));
+                }
+            }
+        }
+        naturalZone = zone;
+
+        // underground light: analyse a chunk a few seconds after it was scanned, once its light data has arrived
+        if (lightBox.get() && isOverworld(world)) {
+            long now = System.currentTimeMillis();
+            int budget = 4;
+            for (Map.Entry<ChunkPos, Long> e : scannedAt.entrySet()) {
+                if (budget <= 0) break;
+                if (now - e.getValue() < 3000) continue;
+                ChunkPos cp = e.getKey();
+                if (lightChecked.contains(cp)) continue;
+                WorldChunk lightChunk = seenChunks.get(cp);
+                if (lightChunk == null) continue;
+                lightChecked.add(cp);
+                queueLight(world, lightChunk);
+                budget--;
+            }
+        }
+        scannedAt.keySet().removeIf(c -> !seenChunks.containsKey(c));
+
         Set<ChunkPos> ugStrong = new HashSet<>();
-        if (ugDetect.get() && ugFlagsChunks.get()) {
+        if ((ugDetect.get() || lightBox.get()) && ugFlagsChunks.get()) {
             int thr = ugThreshold.get();
-            for (Map.Entry<ChunkPos, Integer> e : ugScores.entrySet()) {
-                ChunkPos pos = e.getKey();
-                if (e.getValue() < thr) continue;
+            Set<ChunkPos> keys = new HashSet<>(ugScores.keySet());
+            keys.addAll(lightScores.keySet());
+            for (ChunkPos pos : keys) {
+                int score = effUg(pos);
+                if (score < thr) continue;
                 if (!world.getChunkManager().isChunkLoaded(pos.x, pos.z)) continue;
-                sus.merge(pos, e.getValue(), Integer::max);
+                sus.merge(pos, score, Integer::max);
                 ugStrong.add(pos);
             }
         }
@@ -1083,6 +1242,113 @@ public class SusChunkFinderTest extends Module {
         }
     }
 
+    private static boolean isOverworld(ClientWorld world) {
+        return world != null && world.getRegistryKey() == World.OVERWORLD;
+    }
+
+    /**
+     * Underground evidence for a chunk: blocks that do not generate naturally plus box-shaped lit rooms.
+     * Inside (or next to) a natural structure it counts for nothing, unless it is far above the threshold.
+     */
+    private int effUg(ChunkPos c) {
+        int score = ugScores.getOrDefault(c, 0) + lightScores.getOrDefault(c, 0);
+        if (score <= 0) return 0;
+        if (ignoreNatural.get() && naturalZone.contains(c) && score < ugThreshold.get() * 3) return 0;
+        return score;
+    }
+
+    private void queueLight(ClientWorld world, WorldChunk chunk) {
+        ExecutorService[] pool = executors;
+        if (pool == null) return;
+
+        int minY = Math.min(ugMinY.get(), ugMaxY.get());
+        int maxY = Math.max(ugMinY.get(), ugMaxY.get());
+        int minLight = lightMin.get(), minSize = boxMinSize.get(), ratio = boxShape.get(), minLayers = boxLayers.get();
+
+        ChunkPos pos = chunk.getPos();
+        pool[Math.floorMod(pos.x * 31 + pos.z, pool.length)].execute(() -> {
+            try {
+                lightScan(world, chunk, minY, maxY, minLight, minSize, ratio, minLayers);
+            } catch (Throwable t) {
+                ChuklAddon.LOG.error("Sus Chunk Finder Test light scan failed", t);
+            }
+        });
+    }
+
+    /**
+     * Looks at the block light of every Y level in the dig range. On a level where the lit cells are mostly one
+     * clean rectangle (a sealed, lit room), that level counts as a box layer. Natural caves are lit as blobs.
+     */
+    private void lightScan(ClientWorld world, WorldChunk chunk, int minY, int maxY, int minLight, int minSize, int ratioPct, int minLayers) {
+        if (world != mc.world) return;
+
+        ChunkPos cp = chunk.getPos();
+        BlockPos.Mutable m = new BlockPos.Mutable();
+        boolean[][] lit = new boolean[16][16];
+        int layers = 0;
+        long sumX = 0, sumZ = 0, cells = 0;
+
+        for (int y = Math.max(minY, -64); y <= Math.min(maxY, 319); y++) {
+            int n = 0;
+            for (int x = 0; x < 16; x++) {
+                for (int z = 0; z < 16; z++) {
+                    boolean on = world.getLightLevel(LightType.BLOCK, m.set(cp.getStartX() + x, y, cp.getStartZ() + z)) >= minLight;
+                    lit[x][z] = on;
+                    if (on) n++;
+                }
+            }
+
+            // too little light = nothing to see, nearly the whole chunk lit = lava lake or open cavern, not a room
+            if (n < minSize * minSize || n > 200) continue;
+
+            int[] rect = maxRect(lit); // {area, width, depth} of the biggest fully lit rectangle
+            if (rect[1] < minSize || rect[2] < minSize) continue;
+            if (rect[0] * 100 < n * ratioPct) continue;
+
+            layers++;
+            for (int x = 0; x < 16; x++) {
+                for (int z = 0; z < 16; z++) {
+                    if (!lit[x][z]) continue;
+                    sumX += cp.getStartX() + x;
+                    sumZ += cp.getStartZ() + z;
+                    cells++;
+                }
+            }
+        }
+
+        int score = layers >= minLayers ? Math.min(60, layers * 5) : 0;
+        if (score > 0 && cells > 0) {
+            lightScores.put(cp, score);
+            ugTargets.putIfAbsent(cp, new BlockPos((int) (sumX / cells), 0, (int) (sumZ / cells)));
+        } else {
+            lightScores.remove(cp);
+        }
+    }
+
+    /** Biggest rectangle made only of true cells: {area, width, depth}. */
+    private static int[] maxRect(boolean[][] grid) {
+        int[] h = new int[16];
+        int bestArea = 0, bestW = 0, bestD = 0;
+        for (int x = 0; x < 16; x++) {
+            for (int z = 0; z < 16; z++) h[z] = grid[x][z] ? h[z] + 1 : 0;
+            for (int i = 0; i < 16; i++) {
+                int minH = Integer.MAX_VALUE;
+                for (int j = i; j < 16; j++) {
+                    minH = Math.min(minH, h[j]);
+                    if (minH == 0) break;
+                    int width = j - i + 1;
+                    int area = width * minH;
+                    if (area > bestArea) {
+                        bestArea = area;
+                        bestW = width;
+                        bestD = minH;
+                    }
+                }
+            }
+        }
+        return new int[]{bestArea, bestW, bestD};
+    }
+
     /** The Y level everything is drawn at: the fixed chunk-y, or your own height plus the offset. */
     private double baseY() {
         if (yMode.get() == YMode.Follow_Player && mc.player != null) return mc.player.getY() + yOffset.get();
@@ -1090,7 +1356,7 @@ public class SusChunkFinderTest extends Module {
     }
 
     private double rank(ChunkPos c, Map<ChunkPos, Integer> levels) {
-        return heatmap.getOrDefault(c, 0) + ugScores.getOrDefault(c, 0) + 5.0 * levels.getOrDefault(c, 0);
+        return heatmap.getOrDefault(c, 0) + effUg(c) + 5.0 * levels.getOrDefault(c, 0);
     }
 
     /** Picks the best chunk(s) to dig: most evidence first, nearest first on ties. Keeps the old pick unless something beats it. */
@@ -1123,7 +1389,7 @@ public class SusChunkFinderTest extends Module {
             if (announceBest.get() && renderMode.get() == RenderMode.Best_Chunks) {
                 BlockPos t = digTarget(top);
                 info("Best dig spot: X " + t.getX() + "  Z " + t.getZ() + "  (chunk " + top.x + ", " + top.z
-                    + ", score " + (int) rank(top, levels) + ", underground " + ugScores.getOrDefault(top, 0) + ")");
+                    + ", score " + (int) rank(top, levels) + ", underground " + effUg(top) + ")");
             }
         }
         return out;
