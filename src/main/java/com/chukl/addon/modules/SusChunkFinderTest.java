@@ -64,6 +64,8 @@ public class SusChunkFinderTest extends Module {
 
     public enum YMode { Fixed, Follow_Player }
 
+    public enum ServerProfile { Auto, Standard, DonutFolia }
+
     private record Zone(double centerX, double centerZ, int size, int maxHeat, int level) {}
 
     private record Opts(boolean kelp, boolean caveVines, boolean vines, boolean amethyst, boolean folia,
@@ -73,6 +75,7 @@ public class SusChunkFinderTest extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgRender = settings.createGroup("Render");
     private final SettingGroup sgUg = settings.createGroup("Underground");
+    private final SettingGroup sgAdapt = settings.createGroup("Adaptive");
 
     // --- General (same list and order as Krypton) ---
 
@@ -406,6 +409,49 @@ public class SusChunkFinderTest extends Module {
         .build()
     );
 
+    // --- Test: adaptive to the server ---
+
+    private final Setting<Boolean> adaptive = sgAdapt.add(new BoolSetting.Builder()
+        .name("adaptive-mode")
+        .description("Adapt to the server you are on: detect its type, learn how far it really sends chunks, keep the simulation distance inside that, and tune the sensitivity to how noisy the server is. Off = behave exactly like the settings say.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<ServerProfile> serverProfile = sgAdapt.add(new EnumSetting.Builder<ServerProfile>()
+        .name("server-profile")
+        .description("Auto = pick from the server brand (DonutFolia is detected automatically). Standard = normal vanilla / Paper / Spigot behavior. DonutFolia = amethyst handling for DonutFolia servers.")
+        .defaultValue(ServerProfile.Auto)
+        .visible(adaptive::get)
+        .build()
+    );
+
+    private final Setting<Boolean> autoSensitivity = sgAdapt.add(new BoolSetting.Builder()
+        .name("auto-sensitivity")
+        .description("Raises the sensitivity a little when far too many chunks get flagged (a server full of farms and builds) and lowers it back when almost nothing is flagged. It never goes below your own sensitivity.")
+        .defaultValue(true)
+        .visible(adaptive::get)
+        .build()
+    );
+
+    private final Setting<Integer> maxBoost = sgAdapt.add(new IntSetting.Builder()
+        .name("max-sensitivity-boost")
+        .description("Most the sensitivity may be raised above your own setting.")
+        .defaultValue(10)
+        .range(1, 20)
+        .sliderRange(1, 20)
+        .visible(() -> adaptive.get() && autoSensitivity.get())
+        .build()
+    );
+
+    private final Setting<Boolean> announceAdapt = sgAdapt.add(new BoolSetting.Builder()
+        .name("announce-adaptation")
+        .description("Say in chat what the module adapted to (server brand, chunk radius, simulation distance, sensitivity).")
+        .defaultValue(true)
+        .visible(adaptive::get)
+        .build()
+    );
+
     // --- Test: underground detection ---
 
     private final Setting<Boolean> ugDetect = sgUg.add(new BoolSetting.Builder()
@@ -565,6 +611,12 @@ public class SusChunkFinderTest extends Module {
     private final Set<ChunkPos> lightChecked = ConcurrentHashMap.newKeySet();
     private final Map<ChunkPos, Integer> lightScores = new ConcurrentHashMap<>();
     private volatile Set<ChunkPos> naturalZone = Set.of();
+    private int observedRadius = -1;
+    private long observedChangedAt;
+    private int sensOffset;
+    private long lastSensChangeAt;
+    private long lastAnnounceAt;
+    private String lastAdaptMsg = "";
     private volatile List<ChunkPos> bestChunks = List.of();
     private ChunkPos lastAnnounced;
     private int lastUgSig;
@@ -758,6 +810,11 @@ public class SusChunkFinderTest extends Module {
         lightChecked.clear();
         lightScores.clear();
         naturalZone = Set.of();
+        observedRadius = -1;
+        observedChangedAt = System.currentTimeMillis();
+        sensOffset = 0;
+        lastSensChangeAt = System.currentTimeMillis();
+        lastAdaptMsg = "";
         ugFlagged = Set.of();
         bestChunks = List.of();
         lastAnnounced = null;
@@ -767,6 +824,8 @@ public class SusChunkFinderTest extends Module {
 
     private boolean isDonutFolia() {
         if (mc.getNetworkHandler() == null) return false;
+        ServerProfile profile = serverProfile.get();
+        if (adaptive.get() && profile != ServerProfile.Auto) return profile == ServerProfile.DonutFolia;
         String brand = mc.getNetworkHandler().getBrand();
         return brand != null && brand.contains("DonutFolia");
     }
@@ -778,13 +837,61 @@ public class SusChunkFinderTest extends Module {
             isOverworld(mc.world) && ignoreNatural.get() ? natInfo() : Map.of());
     }
 
+    /** Your setting, but never more than the chunk radius this server really sends (once that radius has settled). */
     private int effectiveSimDist() {
-        return simulationDistance.get();
+        int base = simulationDistance.get();
+        if (adaptive.get() && observedRadius > 0 && System.currentTimeMillis() - observedChangedAt > 3000) {
+            return Math.min(base, observedRadius);
+        }
+        return base;
     }
 
-    /** Your sensitivity is used exactly as set. Smart Adjustment does not change it. */
+    /** Your sensitivity, plus what auto-sensitivity added for this server. Smart Adjustment itself never changes it. */
     private int effectiveSensitivity() {
-        return sensitivity.get();
+        return sensitivity.get() + (adaptive.get() && autoSensitivity.get() ? sensOffset : 0);
+    }
+
+    /** Learns how noisy the server is: too many flagged chunks raise the sensitivity, almost none lower it again. */
+    private void adaptSensitivity(int flagged) {
+        if (!adaptive.get() || !autoSensitivity.get()) {
+            sensOffset = 0;
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        if (now - lastSensChangeAt < 15000) return;
+
+        int loaded = loadedChunks.size();
+        if (loaded < 40) return;
+
+        double ratio = flagged / (double) loaded;
+        if (ratio > 0.05 && sensOffset < maxBoost.get()) {
+            sensOffset++;
+            lastSensChangeAt = now;
+        } else if (ratio < 0.004 && sensOffset > 0) {
+            sensOffset--;
+            lastSensChangeAt = now;
+        } else if (sensOffset > maxBoost.get()) {
+            sensOffset = maxBoost.get();
+        }
+    }
+
+    private void announceAdaptation() {
+        if (!adaptive.get() || !announceAdapt.get()) return;
+        if (observedRadius <= 0 || loadedChunks.size() < 20) return;
+
+        long now = System.currentTimeMillis();
+        if (now - observedChangedAt < 5000 || now - lastAnnounceAt < 30000) return; // wait until things settle
+
+        String brand = mc.getNetworkHandler() == null ? "?" : String.valueOf(mc.getNetworkHandler().getBrand());
+        String msg = "Adapted to this server (" + brand + (isDonutFolia() ? ", DonutFolia mode" : "") + "): chunk radius "
+            + observedRadius + ", simulation distance " + effectiveSimDist() + ", sensitivity " + effectiveSensitivity()
+            + (sensOffset > 0 ? " (your " + sensitivity.get() + " + " + sensOffset + " for a noisy server)" : "");
+        if (msg.equals(lastAdaptMsg)) return;
+
+        lastAdaptMsg = msg;
+        lastAnnounceAt = now;
+        info(msg);
     }
 
     /**
@@ -797,10 +904,12 @@ public class SusChunkFinderTest extends Module {
         var manager = mc.world.getChunkManager();
         ChunkPos center = mc.player.getChunkPos();
         int radius = mc.options.getViewDistance().getValue() + (smartAdjustment.get() ? 0 : 2);
+        int farthest = 0;
 
         for (int cx = center.x - radius; cx <= center.x + radius; cx++) {
             for (int cz = center.z - radius; cz <= center.z + radius; cz++) {
                 if (!manager.isChunkLoaded(cx, cz)) continue;
+                farthest = Math.max(farthest, Math.max(Math.abs(cx - center.x), Math.abs(cz - center.z)));
 
                 WorldChunk chunk = manager.getWorldChunk(cx, cz);
                 if (chunk == null) continue;
@@ -811,6 +920,12 @@ public class SusChunkFinderTest extends Module {
                     queue(chunk);
                 }
             }
+        }
+
+        // The farthest chunk the server actually sent us is the real radius (servers can cap your render distance)
+        if (farthest > observedRadius) {
+            observedRadius = farthest;
+            observedChangedAt = System.currentTimeMillis();
         }
 
         // Forget unloaded chunks so they get scanned again when they come back
@@ -1095,6 +1210,7 @@ public class SusChunkFinderTest extends Module {
         scanNewChunks();
 
         if (debugInfo.get() && mc.player.age % 40 == 0) printDebug();
+        if (mc.player.age % 100 == 0) announceAdaptation();
 
         if (--timer > 0) return;
         timer = 2; // refresh the sus list every other tick
@@ -1119,6 +1235,8 @@ public class SusChunkFinderTest extends Module {
 
             if (neighbors >= 3) sus.put(pos, entry.getValue());
         }
+        adaptSensitivity(sus.size());
+
         // chunks that belong to (or touch) a natural structure
         Set<ChunkPos> zone = new HashSet<>();
         if (ignoreNatural.get()) {
@@ -1572,7 +1690,7 @@ public class SusChunkFinderTest extends Module {
             boolean smart = smartAdjustment.get();
             int view = mc.options.getViewDistance().getValue();
             ChunkPos here = mc.player.getChunkPos();
-            int sens = Math.max(1, sensitivity.get());
+            int sens = Math.max(1, effectiveSensitivity());
             Map<ChunkPos, Integer> levels = susLevel;
 
             for (Map.Entry<ChunkPos, Integer> entry : chunks.entrySet()) {
