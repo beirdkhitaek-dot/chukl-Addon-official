@@ -4,6 +4,7 @@ import com.chukl.addon.modules.DeepBlockEntityEsp;
 import com.chukl.addon.modules.DugOutHighlighter;
 import com.chukl.addon.modules.LightFinder;
 import com.chukl.addon.modules.KrispyChunkFinder;
+import com.chukl.addon.modules.ChuklSpawnerNotifier;
 import com.chukl.addon.modules.SusChunkFinder;
 import com.chukl.addon.modules.SusChunkFinderTest;
 import com.chukl.addon.modules.VulxtsFreeLook;
@@ -48,6 +49,7 @@ public class ChuklAddon extends MeteorAddon {
         Modules.get().add(new DugOutHighlighter());
         Modules.get().add(new SusChunkFinder());
         Modules.get().add(new SusChunkFinderTest());
+        Modules.get().add(new ChuklSpawnerNotifier());
         Modules.get().add(new LightFinder());
         Modules.get().add(new WaterSusChunk());
         Modules.get().add(new VulxtsSusChunk());

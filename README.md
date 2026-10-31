@@ -7,6 +7,7 @@ A Meteor Client addon for Minecraft 1.21.11 (Fabric).
 - **Dug Out Highlighter** - highlights big rectangular dug out areas underground, with a see-through-walls toggle.
 - **Sus Chunk Finder** - Krypton-style base finder using plant/amethyst growth and rotated deepslate. Zone pillar has selectable styles: Outline, Solid, Light Beam, Pulse Beam, Rainbow Beam (color, width, height, glow, speed).
 - **Sus Chunk Finder Test** (`sus-chunk-finder-test`) - experimental copy of the Sus Chunk Finder: the best chunk is drawn as a glowing blue energy orb with electric arcs (or a dig-range column), with a dig shaft, a lightning/beam pillar, tracers and a selectable Y level (fixed or following you). Also scans Y29 to -64 for player-made blocks (storage, utility, redstone, lighting, building).
+- **Spawner Notifier** (`spawner-notifier`) - detects unnatural (player-placed or changed) spawners, tells you which mob it spawns, notifies with a toast, chat message and ping, and marks it with a lightning beam in any color (by mob, one color, or rainbow). Natural dungeon / mineshaft / stronghold / fortress spawners are recognised and ignored.
 - **Light Finder** - highlights underground light, which can reveal hidden bases.
 - **Water Sus Chunk** (`water-suschunk`) - Water Client's Sus Chunk Finder: amethyst clusters plus underground chests, with flashing base chunks.
 - **Vulxts Sus Chunk** (`vulxts-suschunk`) - Vulxts' Sus Chunk Finder: weighted amethyst/kelp/bamboo/berries/vines/dripstone scoring with smart zone merging.
