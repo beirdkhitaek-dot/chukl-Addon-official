@@ -22,6 +22,7 @@ import meteordevelopment.meteorclient.utils.render.RenderUtils;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.registry.Registries;
 import net.minecraft.state.property.Properties;
+import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Direction;
@@ -39,6 +40,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -333,6 +335,23 @@ public class SusChunkFinderTest extends Module {
         .description("Print the coordinates of the best dig spot in chat when it changes.")
         .defaultValue(true)
         .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
+        .build()
+    );
+
+    private final Setting<Boolean> verifyChunk = sgRender.add(new BoolSetting.Builder()
+        .name("verify-chunk")
+        .description("When a best chunk shows up, re-read its real chunk data (and every chunk that contributes to it) and show the true scan progress. "
+            + "If the fresh data no longer supports it, it is marked a false positive and the next best chunk takes its place.")
+        .defaultValue(false)
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
+        .build()
+    );
+
+    private final Setting<Boolean> verifyPercent = sgRender.add(new BoolSetting.Builder()
+        .name("verify-percent")
+        .description("Show the scan percentage above the hotbar while verifying. It disappears when the scan is finished.")
+        .defaultValue(true)
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks && verifyChunk.get())
         .build()
     );
 
@@ -719,6 +738,15 @@ public class SusChunkFinderTest extends Module {
     private long lastAnnounceAt;
     private String lastAdaptMsg = "";
     private volatile List<ChunkPos> bestChunks = List.of();
+
+    // verification (real progress: sections actually read / sections that will be read)
+    private final Set<ChunkPos> rejected = ConcurrentHashMap.newKeySet();
+    private final Set<ChunkPos> confirmed = ConcurrentHashMap.newKeySet();
+    private volatile ChunkPos verifying = null;
+    private final AtomicInteger verifyDone = new AtomicInteger();
+    private volatile int verifyTotal = 0;
+    private volatile int verifyUnits = 0;
+    private volatile int verifyUnitsDone = 0;
     private ChunkPos lastAnnounced;
     private int lastUgSig;
     private int ugMaskCache = -1;
@@ -923,6 +951,11 @@ public class SusChunkFinderTest extends Module {
         ugFlagged = Set.of();
         bestChunks = List.of();
         lastAnnounced = null;
+        rejected.clear();
+        confirmed.clear();
+        verifying = null;
+        verifyTotal = 0;
+        verifyDone.set(0);
     }
 
     // ---------- scanning ----------
@@ -1134,6 +1167,11 @@ public class SusChunkFinderTest extends Module {
     }
 
     private ScanResult scanChunk(ClientWorld world, WorldChunk chunk, ChunkPos cp, Opts o) {
+        return scanChunk(world, chunk, cp, o, null);
+    }
+
+    /** progress (if given) is called once for every section that has been fully read. */
+    private ScanResult scanChunk(ClientWorld world, WorldChunk chunk, ChunkPos cp, Opts o, Runnable progress) {
         ChunkSection[] sections = chunk.getSectionArray();
         int bottomSection = chunk.getBottomSectionCoord();
         int startX = cp.getStartX();
@@ -1168,6 +1206,7 @@ public class SusChunkFinderTest extends Module {
         BlockPos.Mutable other = new BlockPos.Mutable();
 
         for (int i = 0; i < sections.length; i++) {
+            if (progress != null && i > 0) progress.run();
             ChunkSection section = sections[i];
             if (section == null || section.isEmpty()) continue;
 
@@ -1284,6 +1323,8 @@ public class SusChunkFinderTest extends Module {
             }
         }
 
+        if (progress != null && sections.length > 0) progress.run();
+
         if (o.folia()) {
             if (foundBuds) grown++;
             else if (foundClusters) notGrown++;
@@ -1389,6 +1430,7 @@ public class SusChunkFinderTest extends Module {
             }
         }
         ugFlagged = ugStrong;
+        if (verifyChunk.get()) sus.keySet().removeAll(rejected);
 
         if (smartAdjustment.get()) applySmartMode(sus, minSensitivity);
         else {
@@ -1397,6 +1439,7 @@ public class SusChunkFinderTest extends Module {
         }
         susChunks = sus;
         bestChunks = pickBest(sus);
+        updateVerification(world);
 
         if (rotatedDeepslate.get()) {
             deepslateSet.removeIf(p -> !world.getChunkManager().isChunkLoaded(p.getX() >> 4, p.getZ() >> 4));
@@ -1704,6 +1747,112 @@ public class SusChunkFinderTest extends Module {
             }
         }
         return out;
+    }
+
+    // ---------- verification ----------
+
+    /** Main thread: starts a verification of the top chunk when needed, and shows the real progress. */
+    private void updateVerification(ClientWorld world) {
+        if (!verifyChunk.get() || renderMode.get() != RenderMode.Best_Chunks) {
+            verifying = null;
+            return;
+        }
+        ChunkPos cur = verifying;
+        if (cur != null) {
+            int total = verifyTotal;
+            if (verifyPercent.get() && total > 0 && mc.inGameHud != null) {
+                int pct = Math.min(99, (int) (verifyDone.get() * 100L / total));
+                mc.inGameHud.setOverlayMessage(Text.literal("Verifying chunk " + cur.x + ", " + cur.z + ":  " + pct + "%  ("
+                    + verifyUnitsDone + "/" + verifyUnits + " chunks read)"), false);
+            }
+            return;
+        }
+        List<ChunkPos> best = bestChunks;
+        if (best.isEmpty()) return;
+        ChunkPos top = best.get(0);
+        if (confirmed.contains(top) || rejected.contains(top)) return;
+        startVerify(world, top);
+    }
+
+    private void startVerify(ClientWorld world, ChunkPos cp) {
+        Opts o = opts();
+        int sim = effectiveSimDist();
+        int need = effectiveSensitivity();
+        int ugThr = ugThreshold.get();
+
+        List<WorldChunk> reads = new ArrayList<>();
+        List<ChunkPos> poses = new ArrayList<>();
+        int total = 0;
+        WorldChunk self = world.getChunkManager().getWorldChunk(cp.x, cp.z);
+        if (self == null) return;
+        reads.add(self);
+        poses.add(cp);
+        total += self.getSectionArray().length;
+        for (int dx = -sim; dx <= sim; dx++) {
+            for (int dz = -sim; dz <= sim; dz++) {
+                if (dx == 0 && dz == 0) continue;
+                ChunkPos n = new ChunkPos(cp.x + dx, cp.z + dz);
+                if (growthCounts.getOrDefault(n, 0) <= 0) continue; // only chunks that actually gave this one heat
+                WorldChunk wc = world.getChunkManager().getWorldChunk(n.x, n.z);
+                if (wc == null) continue;
+                reads.add(wc);
+                poses.add(n);
+                total += wc.getSectionArray().length;
+            }
+        }
+
+        verifying = cp;
+        verifyDone.set(0);
+        verifyTotal = Math.max(1, total);
+        verifyUnits = reads.size();
+        verifyUnitsDone = 0;
+
+        Thread t = new Thread(() -> {
+            try {
+                int growth = 0;
+                ScanResult selfRes = null;
+                for (int i = 0; i < reads.size(); i++) {
+                    if (mc.world != world) return;
+                    ScanResult r = scanChunk(world, reads.get(i), poses.get(i), o, verifyDone::incrementAndGet);
+                    if (i == 0) selfRes = r;
+                    growth += r.notGrown();
+                    verifyUnitsDone = i + 1;
+                }
+                if (mc.world != world || selfRes == null) return;
+
+                int freshUg = selfRes.ugScore() + lightScores.getOrDefault(cp, 0) + deepScores.getOrDefault(cp, 0);
+                boolean natural = ignoreNatural.get() && (selfRes.natMask() != 0 || naturalZone.contains(cp)) && freshUg < ugThr * 3;
+                boolean growthOk = growth >= need;
+                boolean ugOk = ugFlagsChunks.get() && freshUg >= ugThr && !natural;
+                boolean ok = !natural && (growthOk || ugOk);
+
+                String reason = ok
+                    ? (growthOk ? "growth evidence " + growth + " (needs " + need + ")" : "underground evidence " + freshUg + " (needs " + ugThr + ")")
+                    : natural ? "it is a natural structure"
+                    : "fresh data shows growth " + growth + " (needs " + need + ") and underground " + freshUg + " (needs " + ugThr + ")";
+
+                if (ok) confirmed.add(cp);
+                else rejected.add(cp);
+
+                mc.execute(() -> {
+                    if (mc.world != world) return;
+                    verifying = null;
+                    verifyTotal = 0;
+                    if (mc.inGameHud != null) mc.inGameHud.setOverlayMessage(Text.empty(), false); // percentage goes away
+                    if (ok) info("Verified chunk " + cp.x + ", " + cp.z + ": " + reason + ".");
+                    else info("False positive: chunk " + cp.x + ", " + cp.z + " dropped - " + reason + ". Moving to the next best chunk.");
+                });
+            } catch (Throwable ex) {
+                ChuklAddon.LOG.error("Sus Chunk Finder verify failed", ex);
+                mc.execute(() -> {
+                    verifying = null;
+                    verifyTotal = 0;
+                    confirmed.add(cp); // do not loop on an error
+                });
+            }
+        }, "SusChunkFinderTest-Verify");
+        t.setDaemon(true);
+        t.start();
     }
 
     /** Where to dig: the middle of the underground blocks found in the chunk, or the chunk center if there are none. */
