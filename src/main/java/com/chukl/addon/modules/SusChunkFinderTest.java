@@ -2086,6 +2086,13 @@ public class SusChunkFinderTest extends Module {
         return t != null ? t : new BlockPos(c.getStartX() + 8, 0, c.getStartZ() + 8);
     }
 
+    /** Used by GoodRoad: dig spots of all currently flagged chunks. */
+    public List<BlockPos> getSusTargets() {
+        List<BlockPos> out = new ArrayList<>();
+        for (ChunkPos c : susChunks.keySet()) out.add(digTarget(c));
+        return out;
+    }
+
     /** Used by GoodRoad: dig spots of the current best chunks. */
     public List<BlockPos> getBestTargets() {
         List<BlockPos> out = new ArrayList<>();

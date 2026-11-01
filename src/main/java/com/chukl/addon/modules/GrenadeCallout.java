@@ -1,13 +1,14 @@
 package com.chukl.addon.modules;
 
 import com.chukl.addon.ChuklAddon;
-import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
+import meteordevelopment.meteorclient.gui.GuiTheme;
+import meteordevelopment.meteorclient.gui.widgets.WWidget;
 import meteordevelopment.meteorclient.settings.StringSetting;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.orbit.EventHandler;
@@ -16,7 +17,6 @@ import net.minecraft.entity.projectile.ProjectileEntity;
 import net.minecraft.registry.Registries;
 import net.minecraft.sound.SoundEvents;
 
-import java.io.File;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -30,9 +30,8 @@ public class GrenadeCallout extends Module {
 
     private final Setting<String> soundFile = sgGeneral.add(new StringSetting.Builder()
         .name("sound-file")
-        .description("Name of your .wav file inside the meteor-client/chukl-visual folder, or a full path. Empty = built-in fallback beep.")
+        .description("Name of your .wav inside meteor-client/chukl-visual (with or without .wav), or a full path.")
         .defaultValue("fire_in_the_hole.wav")
-        .onChanged(v -> clip = null)
         .build());
 
     private final Setting<Double> volume = sgGeneral.add(new DoubleSetting.Builder()
@@ -69,17 +68,10 @@ public class GrenadeCallout extends Module {
     private int lastPlayed = -1000;
     private int age = 0;
     private boolean warned = false;
-    private volatile Object clip; // javax.sound Clip, kept as Object so a missing sound API cannot break class loading
 
     public GrenadeCallout() {
         super(ChuklAddon.VISUAL_CATEGORY, "grenade-callout",
             "Plays a custom .wav sound (like 'Fire in the hole!') when you throw a grenade-type item.");
-    }
-
-    private static File folder() {
-        File f = new File(MeteorClient.FOLDER, "chukl-visual");
-        if (!f.exists()) f.mkdirs();
-        return f;
     }
 
     @Override
@@ -87,9 +79,7 @@ public class GrenadeCallout extends Module {
         seen.clear();
         age = 0;
         warned = false;
-        clip = null;
-        File dir = folder();
-        info("Put your .wav in: " + dir.getAbsolutePath() + " and set sound-file to its name.");
+        info("Put your .wav in: " + ChuklSound.folders().get(0).getAbsolutePath() + " then press Refresh in the module settings.");
     }
 
     private boolean wanted(String path) {
@@ -135,48 +125,20 @@ public class GrenadeCallout extends Module {
     private void callout() {
         if (chat.get()) info("Fire in the hole!");
         float vol = volume.get().floatValue();
+        String name = soundFile.get();
         Thread t = new Thread(() -> {
-            if (!playWav(vol)) fallback(vol);
+            String err = ChuklSound.play(name, vol);
+            if (!err.isEmpty()) mc.execute(() -> {
+                if (mc.player != null) mc.player.playSound(SoundEvents.ENTITY_TNT_PRIMED, vol, 1.0F);
+                if (!warned) { warned = true; info(err); }
+            });
         }, "GrenadeCallout-Sound");
         t.setDaemon(true);
         t.start();
     }
 
-    private void fallback(float vol) {
-        mc.execute(() -> {
-            if (mc.player != null) mc.player.playSound(SoundEvents.ENTITY_TNT_PRIMED, vol, 1.0F);
-            if (!warned) {
-                warned = true;
-                info("Could not play your .wav (missing file, bad format, or no audio support). Use a 16-bit PCM .wav. Folder: " + folder().getAbsolutePath());
-            }
-        });
-    }
-
-    private boolean playWav(float vol) {
-        try {
-            String name = soundFile.get().trim();
-            if (name.isEmpty()) return false;
-            File f = new File(name);
-            if (!f.isAbsolute()) f = new File(folder(), name);
-            if (!f.isFile()) return false;
-
-            javax.sound.sampled.AudioInputStream in = javax.sound.sampled.AudioSystem.getAudioInputStream(f);
-            javax.sound.sampled.Clip c = javax.sound.sampled.AudioSystem.getClip();
-            c.open(in);
-            if (c.isControlSupported(javax.sound.sampled.FloatControl.Type.MASTER_GAIN)) {
-                javax.sound.sampled.FloatControl g = (javax.sound.sampled.FloatControl) c.getControl(javax.sound.sampled.FloatControl.Type.MASTER_GAIN);
-                float db = (float) (20.0 * Math.log10(Math.max(0.0001, vol)));
-                g.setValue(Math.max(g.getMinimum(), Math.min(g.getMaximum(), db)));
-            }
-            c.addLineListener(ev -> {
-                if (ev.getType() == javax.sound.sampled.LineEvent.Type.STOP) {
-                    try { c.close(); } catch (Throwable ignored) {}
-                }
-            });
-            c.start();
-            return true;
-        } catch (Throwable t) {
-            return false;
-        }
+    @Override
+    public WWidget getWidget(GuiTheme theme) {
+        return SoundWidget.make(theme, soundFile, () -> volume.get().floatValue(), this::info);
     }
 }

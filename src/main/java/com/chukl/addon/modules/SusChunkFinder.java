@@ -795,6 +795,13 @@ public class SusChunkFinder extends Module {
             + ", flagged " + susChunks.containsKey(cp));
     }
 
+    /** Used by GoodRoad: centers of the currently flagged chunks. */
+    public List<BlockPos> getSusTargets() {
+        List<BlockPos> out = new ArrayList<>();
+        for (ChunkPos c : susChunks.keySet()) out.add(new BlockPos(c.getStartX() + 8, 0, c.getStartZ() + 8));
+        return out;
+    }
+
     @EventHandler
     private void onHud(Render2DEvent event) {
         if (!hudOn.get() || mc.player == null || mc.world == null || mc.options.hudHidden) return;

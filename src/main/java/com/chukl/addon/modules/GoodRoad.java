@@ -74,6 +74,16 @@ public class GoodRoad extends Module {
         .name("manual-z").description("Manual target Z (0 and 0 means not set).")
         .defaultValue(0).noSlider().build());
 
+    private final Setting<Integer> exploreDistance = sgGeneral.add(new IntSetting.Builder()
+        .name("explore-distance")
+        .description("How far ahead each exploring leg goes. The road is planned over loaded chunks and continues as a thin dotted line beyond them.")
+        .defaultValue(256).sliderRange(64, 1000).build());
+
+    private final Setting<Boolean> showUnplanned = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-dotted-continuation")
+        .description("Draw the dotted line from the end of the planned road (edge of loaded chunks) to the target, so the road never just stops.")
+        .defaultValue(true).build());
+
     private final Setting<Integer> arriveDistance = sgGeneral.add(new IntSetting.Builder()
         .name("arrive-distance").description("Counts as arrived inside this many blocks.")
         .defaultValue(6).min(2).sliderMax(30).build());
@@ -170,7 +180,7 @@ public class GoodRoad extends Module {
         .name("goal-beam-height").defaultValue(80).min(10).sliderMax(300).build());
 
     // ---- State ----
-    private record Plan(List<double[]> pts, BlockPos start, BlockPos goal, long tick, boolean partial) {}
+    private record Plan(List<double[]> pts, BlockPos start, BlockPos goal, long tick, boolean partial, int solid) {}
 
     private final Set<Long> visited = ConcurrentHashMap.newKeySet();
     private volatile Plan plan = null;
@@ -186,6 +196,8 @@ public class GoodRoad extends Module {
     private String lastAnnounced = "";
     private String dim = "";
     private int nearestIdx = 0;
+    private BlockPos exploreGoal = null;
+    private Heading lastHeadingSetting = null;
     private volatile int lastDir = 0;
 
     private static final int[][] DIRS = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
@@ -202,6 +214,7 @@ public class GoodRoad extends Module {
         goal = null;
         arrived = false;
         heading = -1;
+        exploreGoal = null;
         nodeScale = 1.0;
         lastAnnounced = "";
         ticks = 0;
@@ -234,6 +247,7 @@ public class GoodRoad extends Module {
             plan = null;
             goal = null;
             heading = -1;
+            exploreGoal = null;
             arrived = false;
         }
 
@@ -312,6 +326,15 @@ public class GoodRoad extends Module {
                 if (n != null) { goalKind = "best sus chunk"; return n; }
             }
         }
+        if (m == TargetMode.Auto || m == TargetMode.Best_Sus_Chunk) {
+            List<BlockPos> any = new ArrayList<>();
+            SusChunkFinder orig = Modules.get().get(SusChunkFinder.class);
+            if (orig != null && orig.isActive()) any.addAll(orig.getSusTargets());
+            SusChunkFinderTest t2 = Modules.get().get(SusChunkFinderTest.class);
+            if (t2 != null && t2.isActive()) any.addAll(t2.getSusTargets());
+            BlockPos n = nearest(any, pp);
+            if (n != null) { goalKind = "sus chunk"; return n; }
+        }
         if ((m == TargetMode.Auto || m == TargetMode.Manual) && (manualX.get() != 0 || manualZ.get() != 0)) {
             goalKind = "manual point";
             return new BlockPos(manualX.get(), 0, manualZ.get());
@@ -335,17 +358,28 @@ public class GoodRoad extends Module {
     }
 
     private BlockPos exploreCarrot(BlockPos pp) {
+        // keep one leg until it is nearly done, so the road does not keep moving while you walk it
+        boolean headingChanged = lastHeadingSetting != exploreHeading.get();
+        lastHeadingSetting = exploreHeading.get();
+        if (exploreGoal != null && !headingChanged
+            && goalXZDist(exploreGoal, pp) > Math.max(24, exploreDistance.get() * 0.12)) {
+            return exploreGoal;
+        }
         int dirIdx = pickHeading(pp);
-        double dist = Math.max(48, Math.min(160, radiusChunks * 16 * 0.8));
+        double dist = Math.max(48, exploreDistance.get());
+        if (adaptive.get()) dist = Math.max(dist, radiusChunks * 16 * 0.8);
         double len = Math.hypot(DIRS[dirIdx][0], DIRS[dirIdx][1]);
         int gx = pp.getX() + (int) Math.round(DIRS[dirIdx][0] / len * dist);
         int gz = pp.getZ() + (int) Math.round(DIRS[dirIdx][1] / len * dist);
-        // keep inside the world border
-        if (mc.world.getWorldBorder() != null && !mc.world.getWorldBorder().contains(new BlockPos(gx, pp.getY(), gz))) {
-            gx = pp.getX() + (int) Math.round(DIRS[dirIdx][0] / len * 24);
-            gz = pp.getZ() + (int) Math.round(DIRS[dirIdx][1] / len * 24);
+        // shorten the leg until it is inside the world border
+        for (int k = 0; k < 6 && mc.world.getWorldBorder() != null
+            && !mc.world.getWorldBorder().contains(new BlockPos(gx, pp.getY(), gz)); k++) {
+            dist *= 0.6;
+            gx = pp.getX() + (int) Math.round(DIRS[dirIdx][0] / len * dist);
+            gz = pp.getZ() + (int) Math.round(DIRS[dirIdx][1] / len * dist);
         }
-        return new BlockPos(gx, 0, gz);
+        exploreGoal = new BlockPos(gx, 0, gz);
+        return exploreGoal;
     }
 
     private int pickHeading(BlockPos pp) {
@@ -430,12 +464,23 @@ public class GoodRoad extends Module {
                             partial = (Boolean) r[1];
                         }
                     }
-                    // fall back to a straight line when nothing walkable was found or the search made no progress
+                    int solid;
                     if (pts == null || pts.size() < 3) {
+                        // nothing walkable found (or no progress): straight line over the surface
                         pts = straight(w, start, g, sy);
-                        partial = false;
+                        solid = walk ? 1 : pts.size();
+                        partial = walk;
+                    } else {
+                        solid = pts.size();
+                        if (partial) {
+                            // the search ran out of loaded chunks: continue straight to the target so the road never just stops
+                            double[] last = pts.get(pts.size() - 1);
+                            BlockPos from = new BlockPos((int) Math.floor(last[0]), (int) last[1], (int) Math.floor(last[2]));
+                            List<double[]> ext = straight(w, from, g, last[1]);
+                            if (ext.size() > 1) pts.addAll(ext.subList(1, ext.size()));
+                        }
                     }
-                    plan = new Plan(pts, start, g, tk, partial);
+                    plan = new Plan(pts, start, g, tk, partial, solid);
                 } catch (Throwable ignored) {
                 } finally {
                     long ms = (System.nanoTime() - t0) / 1_000_000L;
@@ -587,7 +632,7 @@ public class GoodRoad extends Module {
             double t = (double) i / steps;
             int x = (int) Math.floor(start.getX() + dx * t), z = (int) Math.floor(start.getZ() + dz * t);
             if (w.getChunkManager().getWorldChunk(x >> 4, z >> 4) != null) {
-                lastY = w.getTopY(Heightmap.Type.WORLD_SURFACE, x, z);
+                lastY = w.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, x, z);
             }
             pts.add(new double[]{x + 0.5, lastY, z + 0.5});
         }
@@ -601,11 +646,11 @@ public class GoodRoad extends Module {
         if (mc.player == null || mc.world == null) return;
         Plan p = plan;
         double time = (System.currentTimeMillis() % 1_000_000L) / 1000.0;
-        if (p != null && p.pts.size() >= 2) renderRoad(event, p.pts, time);
+        if (p != null && p.pts.size() >= 2) renderRoad(event, p.pts, p.solid, time);
         if (goalBeam.get() && goal != null && !arrived) renderGoal(event, time);
     }
 
-    private void renderRoad(Render3DEvent event, List<double[]> all, double time) {
+    private void renderRoad(Render3DEvent event, List<double[]> all, int solid, double time) {
         // start at the node closest to the player so the line never trails behind you
         double px = mc.player.getX(), pz = mc.player.getZ();
         int from = 0;
@@ -616,7 +661,7 @@ public class GoodRoad extends Module {
             if (dd < bd) { bd = dd; from = i; }
         }
         nearestIdx = from;
-        int to = Math.min(all.size() - 1, from + renderLength.get());
+        int to = Math.min(all.size() - 1, from + Math.max(20, renderLength.get()));
         int n = to - from;
         if (n < 1) return;
 
@@ -627,6 +672,13 @@ public class GoodRoad extends Module {
 
         for (int i = from; i < to; i++) {
             double[] a = all.get(i), b = all.get(i + 1);
+            if (i >= solid) { // continuation past the planned road: thin dotted line
+                if (!showUnplanned.get() || ((i / 3) & 1) == 1) continue;
+                int[] dc = colorAt((double) (i - from) / Math.max(1, n), time);
+                event.renderer.line(a[0], a[1] + heightOffset.get() + 0.3, a[2], b[0], b[1] + heightOffset.get() + 0.3, b[2],
+                    new Color(dc[0], dc[1], dc[2], 150));
+                continue;
+            }
             double t = (double) (i - from) / Math.max(1, n);
             int[] rgb = colorAt(t, time);
             double dist = Math.abs((i - from) - chasePos);

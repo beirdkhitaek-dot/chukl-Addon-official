@@ -50,23 +50,19 @@ public class GoatBlockEsp extends Module {
 
     private final Setting<Integer> minY = sgGeneral.add(new IntSetting.Builder()
         .name("min-y").description("Lowest Y to check.")
-        .defaultValue(-64).min(-64).max(320).sliderRange(-64, 320).build());
+        .defaultValue(-64).sliderRange(-64, 320).build());
 
     private final Setting<Integer> maxY = sgGeneral.add(new IntSetting.Builder()
         .name("max-y").description("Highest Y to check.")
-        .defaultValue(64).min(-64).max(320).sliderRange(-64, 320).build());
+        .defaultValue(64).sliderRange(-64, 320).build());
 
     private final Setting<Integer> range = sgGeneral.add(new IntSetting.Builder()
         .name("range").description("How far away (in blocks) to look.")
-        .defaultValue(64).min(16).sliderMax(256).build());
+        .defaultValue(64).sliderMax(256).build());
 
     private final Setting<Integer> maxBlocks = sgGeneral.add(new IntSetting.Builder()
         .name("max-blocks").description("Most blocks drawn at once (nearest first). Lower is lighter for phones.")
-        .defaultValue(1500).min(50).sliderMax(10000).build());
-
-    private final Setting<Integer> refresh = sgGeneral.add(new IntSetting.Builder()
-        .name("rescan-seconds").description("How often loaded chunks are scanned again to catch mined/placed blocks.")
-        .defaultValue(8).min(1).sliderMax(60).build());
+        .defaultValue(1500).sliderMax(10000).build());
 
     // Boxes
     private final Setting<ColorMode> boxColorMode = sgBoxes.add(new EnumSetting.Builder<ColorMode>()
@@ -81,10 +77,10 @@ public class GoatBlockEsp extends Module {
         .name("shape-mode").defaultValue(ShapeMode.Both).build());
 
     private final Setting<Integer> fillAlpha = sgBoxes.add(new IntSetting.Builder()
-        .name("fill-alpha").defaultValue(70).min(0).max(255).build());
+        .name("fill-alpha").defaultValue(70).sliderMax(500).build());
 
     private final Setting<Integer> lineAlpha = sgBoxes.add(new IntSetting.Builder()
-        .name("line-alpha").defaultValue(255).min(0).max(255).build());
+        .name("line-alpha").defaultValue(255).sliderMax(500).build());
 
     // Tracers (separate color choice)
     private final Setting<Boolean> tracers = sgTracers.add(new BoolSetting.Builder()
@@ -99,11 +95,11 @@ public class GoatBlockEsp extends Module {
         .visible(() -> tracers.get() && tracerColorMode.get() == ColorMode.Custom).build());
 
     private final Setting<Integer> tracerAlpha = sgTracers.add(new IntSetting.Builder()
-        .name("tracer-alpha").defaultValue(220).min(0).max(255).visible(() -> tracers.get()).build());
+        .name("tracer-alpha").defaultValue(220).sliderMax(500).visible(() -> tracers.get()).build());
 
     private final Setting<Integer> maxTracers = sgTracers.add(new IntSetting.Builder()
         .name("max-tracers").description("Only the nearest blocks get a tracer.")
-        .defaultValue(100).min(1).sliderMax(500).visible(() -> tracers.get()).build());
+        .defaultValue(100).sliderMax(500).visible(() -> tracers.get()).build());
 
     private record Item(BlockPos pos, int rgb, double dist) {}
 
@@ -154,10 +150,10 @@ public class GoatBlockEsp extends Module {
     }
 
     private void scanSome() {
-        int vd = Math.max(1, range.get() / 16);
+        int vd = Math.max(1, Math.max(16, range.get()) / 16);
         ChunkPos c = mc.player.getChunkPos();
         long now = System.currentTimeMillis();
-        long stale = refresh.get() * 1000L;
+        long stale = 8000L; // chunks are scanned again every 8 seconds to catch mined or placed blocks
         Set<Block> targets = new HashSet<>(blocks.get());
         int budget = 3;
 
@@ -205,6 +201,8 @@ public class GoatBlockEsp extends Module {
         else cache.put(cp, found);
     }
 
+    private static int clamp255(int v) { return Math.max(0, Math.min(255, v)); }
+
     private static int mapRgb(Block b) {
         try {
             return b.getDefaultMapColor().color;
@@ -216,7 +214,8 @@ public class GoatBlockEsp extends Module {
     private void rebuild() {
         Set<Block> targets = new HashSet<>(blocks.get());
         Vec3d pp = mc.player.getEyePos();
-        double maxSq = (double) range.get() * range.get();
+        double rr = Math.max(16, range.get());
+        double maxSq = rr * rr;
         List<Item> out = new ArrayList<>();
 
         for (List<BlockPos> list : cache.values()) {
@@ -230,7 +229,8 @@ public class GoatBlockEsp extends Module {
             }
         }
         out.sort(Comparator.comparingDouble(Item::dist));
-        if (out.size() > maxBlocks.get()) out = new ArrayList<>(out.subList(0, maxBlocks.get()));
+        int cap = Math.max(1, maxBlocks.get());
+        if (out.size() > cap) out = new ArrayList<>(out.subList(0, cap));
         items = out;
     }
 
@@ -245,15 +245,15 @@ public class GoatBlockEsp extends Module {
             int r, g, b;
             if (customBox) { r = cb.r; g = cb.g; b = cb.b; }
             else { r = (it.rgb >> 16) & 255; g = (it.rgb >> 8) & 255; b = it.rgb & 255; }
-            Color side = new Color(r, g, b, fillAlpha.get());
-            Color line = new Color(r, g, b, lineAlpha.get());
+            Color side = new Color(r, g, b, clamp255(fillAlpha.get()));
+            Color line = new Color(r, g, b, clamp255(lineAlpha.get()));
             event.renderer.box(it.pos, side, line, shapeMode.get(), 0);
         }
 
         if (tracers.get()) {
             boolean customT = tracerColorMode.get() == ColorMode.Custom;
             SettingColor ct = tracerColor.get();
-            int n = Math.min(maxTracers.get(), list.size());
+            int n = Math.max(0, Math.min(maxTracers.get(), list.size()));
             for (int i = 0; i < n; i++) {
                 Item it = list.get(i);
                 int r, g, b;
@@ -261,7 +261,7 @@ public class GoatBlockEsp extends Module {
                 else { r = (it.rgb >> 16) & 255; g = (it.rgb >> 8) & 255; b = it.rgb & 255; }
                 event.renderer.line(RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z,
                     it.pos.getX() + 0.5, it.pos.getY() + 0.5, it.pos.getZ() + 0.5,
-                    new Color(r, g, b, tracerAlpha.get()));
+                    new Color(r, g, b, clamp255(tracerAlpha.get())));
             }
         }
     }

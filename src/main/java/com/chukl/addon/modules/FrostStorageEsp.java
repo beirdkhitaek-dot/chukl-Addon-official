@@ -66,19 +66,19 @@ public class FrostStorageEsp extends Module {
 
     private final Setting<Integer> range = sgGeneral.add(new IntSetting.Builder()
         .name("esp-range").description("How far to draw, in blocks.")
-        .defaultValue(64).min(16).sliderMax(512).build());
+        .defaultValue(64).sliderMax(512).build());
 
     private final Setting<Boolean> fill = sgGeneral.add(new BoolSetting.Builder()
         .name("fill-esp").description("Draw the filled boxes.").defaultValue(true).build());
 
     private final Setting<Integer> fillAlpha = sgGeneral.add(new IntSetting.Builder()
-        .name("fill-alpha").defaultValue(100).min(0).max(255).build());
+        .name("fill-alpha").defaultValue(100).sliderMax(500).build());
 
     private final Setting<Boolean> tracers = sgGeneral.add(new BoolSetting.Builder()
         .name("tracers").description("Lines from you to each storage block.").defaultValue(true).build());
 
     private final Setting<Integer> tracerAlpha = sgGeneral.add(new IntSetting.Builder()
-        .name("tracer-alpha").defaultValue(255).min(0).max(255).build());
+        .name("tracer-alpha").defaultValue(255).sliderMax(500).build());
 
     private final Setting<Boolean> coordinateTracers = sgGeneral.add(new BoolSetting.Builder()
         .name("coordinate-tracers")
@@ -178,7 +178,7 @@ public class FrostStorageEsp extends Module {
         }
         if (sel.isEmpty() || tick % 10 != 0) return;
 
-        int vd = range.get() / 16;
+        int vd = Math.max(1, range.get() / 16);
         ChunkPos c = mc.player.getChunkPos();
         Set<Block> targets = new HashSet<>(sel);
         for (int i = 0; i < 2; i++) {
@@ -217,9 +217,9 @@ public class FrostStorageEsp extends Module {
 
     private void rebuild() {
         List<Item> out = new ArrayList<>();
-        double max = range.get();
+        double max = Math.max(16, range.get());
         double maxSq = max * max;
-        int vd = range.get() / 16;
+        int vd = Math.max(1, range.get() / 16);
         ChunkPos c = mc.player.getChunkPos();
         Vec3d pp = mc.player.getEyePos();
         Set<Long> seen = new HashSet<>();
@@ -286,7 +286,7 @@ public class FrostStorageEsp extends Module {
 
         if (fill.get()) {
             for (Item it : list) {
-                Color f = new Color(it.color.r, it.color.g, it.color.b, fillAlpha.get());
+                Color f = new Color(it.color.r, it.color.g, it.color.b, Math.max(0, Math.min(255, fillAlpha.get())));
                 for (double[] b : it.boxes) {
                     event.renderer.box(b[0], b[1], b[2], b[3], b[4], b[5], f, f, ShapeMode.Sides, 0);
                 }
@@ -305,7 +305,7 @@ public class FrostStorageEsp extends Module {
             int n = Math.min(MAX_TRACERS, list.size());
             for (int i = 0; i < n; i++) {
                 Item it = list.get(i);
-                Color tc = new Color(it.color.r, it.color.g, it.color.b, tracerAlpha.get());
+                Color tc = new Color(it.color.r, it.color.g, it.color.b, Math.max(0, Math.min(255, tracerAlpha.get())));
                 event.renderer.line(sx, sy, sz, it.cx, it.cy, it.cz, tc);
             }
         }

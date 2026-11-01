@@ -6,7 +6,9 @@ import com.chukl.addon.modules.LightFinder;
 import com.chukl.addon.modules.GoatBlockEsp;
 import com.chukl.addon.modules.FrostStorageEsp;
 import com.chukl.addon.modules.GoodRoad;
+import com.chukl.addon.modules.DeathGhost;
 import com.chukl.addon.modules.GrenadeCallout;
+import com.chukl.addon.modules.KillBell;
 import com.chukl.addon.modules.KrispyChunkFinder;
 import com.chukl.addon.modules.ChuklSpawnerNotifier;
 import com.chukl.addon.modules.SusChunkFinder;
@@ -68,6 +70,8 @@ public class ChuklAddon extends MeteorAddon {
 
         // Chukl Visual category
         Modules.get().add(new GrenadeCallout());
+        Modules.get().add(new KillBell());
+        Modules.get().add(new DeathGhost());
 
         // Water Client render modules (Chukl Render category)
         Modules.get().add(new AmethystESP());
