@@ -3,6 +3,7 @@ package com.chukl.addon;
 import com.chukl.addon.modules.DeepBlockEntityEsp;
 import com.chukl.addon.modules.DugOutHighlighter;
 import com.chukl.addon.modules.LightFinder;
+import com.chukl.addon.modules.FrostStorageEsp;
 import com.chukl.addon.modules.GoodRoad;
 import com.chukl.addon.modules.GrenadeCallout;
 import com.chukl.addon.modules.KrispyChunkFinder;
@@ -60,6 +61,8 @@ public class ChuklAddon extends MeteorAddon {
         Modules.get().add(new VulxtsFreeLook());
         Modules.get().add(new KrispyChunkFinder());
         Modules.get().add(new GoodRoad());
+
+        Modules.get().add(new FrostStorageEsp());
 
         // Chukl Visual category
         Modules.get().add(new GrenadeCallout());
