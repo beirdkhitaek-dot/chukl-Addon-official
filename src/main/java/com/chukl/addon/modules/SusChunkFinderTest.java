@@ -1712,6 +1712,13 @@ public class SusChunkFinderTest extends Module {
         return t != null ? t : new BlockPos(c.getStartX() + 8, 0, c.getStartZ() + 8);
     }
 
+    /** Used by GoodRoad: dig spots of the current best chunks. */
+    public List<BlockPos> getBestTargets() {
+        List<BlockPos> out = new ArrayList<>();
+        for (ChunkPos c : bestChunks) out.add(digTarget(c));
+        return out;
+    }
+
     /** Light ESP: boxes on the brightest lit blocks, colored by light level (bright = full color, dim = dark). */
     private void renderLightEsp(Render3DEvent event) {
         if (litCells.isEmpty()) return;

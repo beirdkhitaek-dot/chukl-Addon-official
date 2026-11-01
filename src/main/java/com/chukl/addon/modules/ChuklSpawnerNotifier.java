@@ -239,6 +239,13 @@ public class ChuklSpawnerNotifier extends Module {
     private final Map<BlockPos, Integer> attempts = new HashMap<>();
     private final Set<BlockPos> notified = new HashSet<>();
     private volatile List<Found> shown = List.of();
+
+    /** Used by GoodRoad: positions of spawners flagged as unnatural, nearest first. */
+    public List<BlockPos> getUnnaturalSpawners() {
+        List<BlockPos> out = new ArrayList<>();
+        for (Found f : shown) if (!f.natural()) out.add(f.pos());
+        return out;
+    }
     private ClientWorld lastWorld;
     private int timer;
 
