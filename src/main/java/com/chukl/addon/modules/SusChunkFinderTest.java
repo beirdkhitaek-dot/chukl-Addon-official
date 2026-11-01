@@ -1970,33 +1970,33 @@ public class SusChunkFinderTest extends Module {
         if (nat) conf -= 40;
         int pct = (int) Math.max(5, Math.min(99, Math.round(conf)));
 
-        List<SusHud.Row> rows = new ArrayList<>();
-        boolean best = bestChunks.contains(cp);
-        rows.add(SusHud.Row.of("Suspicious chunk " + cp.x + ", " + cp.z + (best ? "   * best pick" : ""), SusHud.CYAN));
-        SusHud.Row v = SusHud.verdict(pct, nat);
-        rows.add(SusHud.Row.of(v.text, v.color));
-        rows.add(new SusHud.Row("Confidence " + pct + "%", SusHud.GREY, pct));
-
-        rows.add(SusHud.Row.of("Why it was flagged:", SusHud.GREY));
+        SusHud.Data d = new SusHud.Data();
+        d.title = "Suspicious chunk " + cp.x + ", " + cp.z;
+        d.best = bestChunks.contains(cp);
+        SusHud.applyVerdict(d, pct, nat);
         boolean any = false;
-        if (heat >= need) { rows.add(SusHud.Row.of(" + Plants stopped growing here (" + heat + ", needs " + need + ")", SusHud.WHITE)); any = true; }
-        if (ug > 0) { rows.add(SusHud.Row.of(" + Player-made blocks underground (score " + ug + ")", SusHud.WHITE)); any = true; }
-        if (lb > 0) { rows.add(SusHud.Row.of(" + Lit rectangular room underground", SusHud.WHITE)); any = true; }
-        if (dp > 0) { rows.add(SusHud.Row.of(" + Odd light deep underground" + (lavaNear(cp) ? " (lava near, weaker)" : ""), SusHud.WHITE)); any = true; }
-        if (!any) rows.add(SusHud.Row.of(" + Nearby chunks show activity", SusHud.WHITE));
-        if (nat) rows.add(SusHud.Row.of(" - Looks like a natural structure", SusHud.RED));
-        if (blocksHidden) rows.add(SusHud.Row.of(" ! Server hides underground blocks, using light instead", SusHud.ORANGE));
+        if (heat >= need) { d.why.add(new SusHud.Ev('+', SusHud.GREEN, "Plants stopped growing here (" + heat + ", needs " + need + ")")); any = true; }
+        if (ug > 0) { d.why.add(new SusHud.Ev('+', SusHud.GREEN, "Player-made blocks underground (score " + ug + ")")); any = true; }
+        if (lb > 0) { d.why.add(new SusHud.Ev('+', SusHud.GREEN, "Lit rectangular room underground")); any = true; }
+        if (dp > 0) { d.why.add(new SusHud.Ev('+', SusHud.ORANGE, "Odd light deep underground" + (lavaNear(cp) ? " (lava near, weaker)" : ""))); any = true; }
+        if (!any) d.why.add(new SusHud.Ev('+', SusHud.ORANGE, "Nearby chunks show activity"));
+        if (nat) d.why.add(new SusHud.Ev('-', SusHud.RED, "Looks like a natural structure"));
+        if (blocksHidden) d.why.add(new SusHud.Ev('!', SusHud.ORANGE, "Server hides underground blocks, using light instead"));
 
         BlockPos t = digTarget(cp);
         double dist = Math.hypot(cp.getStartX() + 8 - mc.player.getX(), cp.getStartZ() + 8 - mc.player.getZ());
-        rows.add(SusHud.Row.of("", SusHud.GREY));
-        if (verifying != null && verifying.equals(cp) && verifyTotal > 0)
-            rows.add(SusHud.Row.of("Checking it again... " + Math.min(99, (int) (verifyDone.get() * 100L / verifyTotal)) + "%", SusHud.YELLOW));
-        else if (ok) rows.add(SusHud.Row.of("Double-checked: still looks real", SusHud.GREEN));
-        rows.add(SusHud.Row.of("Next: dig down at X " + t.getX() + "  Z " + t.getZ(), SusHud.CYAN));
-        rows.add(SusHud.Row.of((int) dist + " blocks away", SusHud.GREY));
+        if (verifying != null && verifying.equals(cp) && verifyTotal > 0) {
+            d.status = "Checking it again... " + Math.min(99, (int) (verifyDone.get() * 100L / verifyTotal)) + "%";
+            d.statusColor = SusHud.YELLOW;
+        } else if (ok) {
+            d.status = "Double-checked: still looks real";
+            d.statusColor = SusHud.GREEN;
+        }
+        if (nat) { d.actionLabel = "SUGGESTION"; d.action = "Probably skip this one"; }
+        else d.action = "Dig down at X " + t.getX() + "  Z " + t.getZ();
+        d.dist = (int) dist + " blocks away";
 
-        SusHud.draw(event.drawContext, rows, hudSize.get(), hudOpacity.get(), hudOffX.get(), hudOffY.get());
+        SusHud.draw(event.drawContext, d, hudSize.get(), hudOpacity.get(), hudOffX.get(), hudOffY.get());
     }
 
     // ---------- verification ----------

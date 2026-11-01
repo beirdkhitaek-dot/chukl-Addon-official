@@ -50,43 +50,60 @@ final class SusHud {
         return tMin;
     }
 
-    /** One line of the panel. bar >= 0 draws a progress bar (0-100) under the text. */
-    static final class Row {
-        final String text;
-        final int color;
-        final int bar;
-        Row(String text, int color, int bar) { this.text = text; this.color = color; this.bar = bar; }
-        static Row of(String t, int c) { return new Row(t, c, -1); }
-    }
-
-    static final int WHITE = 0xFFE6E6E6, GREY = 0xFF9AA0A6, CYAN = 0xFF3DD9FF, GREEN = 0xFF4CE06A,
+    static final int WHITE = 0xFFE6E6E6, GREY = 0xFF9AA0A6, DIM = 0xFF6B7A8C, CYAN = 0xFF3DD9FF, GREEN = 0xFF4CE06A,
         YELLOW = 0xFFFFD84D, ORANGE = 0xFFFF9A3D, RED = 0xFFFF5C5C;
 
-    /** Plain-language verdict for a 0-100 confidence. */
-    static Row verdict(int conf, boolean natural) {
-        if (natural) return Row.of("PROBABLY NATURAL", RED);
-        if (conf >= 70) return Row.of("VERY LIKELY A BASE", GREEN);
-        if (conf >= 45) return Row.of("LIKELY A BASE", YELLOW);
-        if (conf >= 25) return Row.of("MAYBE - CHECK IT", ORANGE);
-        return Row.of("WEAK SIGNAL", RED);
+    /** One reason line: symbol is '+', '-' or '!'. */
+    record Ev(char symbol, int color, String text) {}
+
+    /** Everything the panel shows. */
+    static final class Data {
+        String title = "";
+        boolean best;
+        int accent = CYAN;
+        String verdict = "";
+        int conf;
+        List<Ev> why = new java.util.ArrayList<>();
+        String status = "";           // e.g. "Checking it again... 40%" or "Double-checked: still looks real"
+        int statusColor = GREY;
+        String actionLabel = "NEXT STEP";
+        String action = "";
+        String dist = "";
     }
 
-    static int barColor(int conf) {
-        return conf >= 70 ? GREEN : conf >= 45 ? YELLOW : conf >= 25 ? ORANGE : RED;
+    /** Fills a Data with the verdict text and color for a confidence. */
+    static void applyVerdict(Data d, int conf, boolean natural) {
+        d.conf = conf;
+        if (natural) { d.verdict = "PROBABLY NATURAL"; d.accent = RED; }
+        else if (conf >= 70) { d.verdict = "VERY LIKELY A BASE"; d.accent = GREEN; }
+        else if (conf >= 45) { d.verdict = "LIKELY A BASE"; d.accent = YELLOW; }
+        else if (conf >= 25) { d.verdict = "MAYBE - CHECK IT"; d.accent = ORANGE; }
+        else { d.verdict = "WEAK SIGNAL"; d.accent = RED; }
     }
 
-    /** Draws a panel next to the crosshair. opacity is 0-100. */
-    static void draw(DrawContext ctx, List<Row> rows, double scale, int opacity, int offX, int offY) {
+    private static int alpha(int argb, int a) { return (Math.max(0, Math.min(255, a)) << 24) | (argb & 0xFFFFFF); }
+
+    /** Draws the panel next to the crosshair. opacity is 0-100. */
+    static void draw(DrawContext ctx, Data d, double scale, int opacity, int offX, int offY) {
         MinecraftClient mc = MinecraftClient.getInstance();
-        if (rows.isEmpty() || mc.textRenderer == null) return;
+        if (mc.textRenderer == null) return;
+        net.minecraft.client.font.TextRenderer tr = mc.textRenderer;
 
-        int w = 150;
-        int h = 0;
-        for (Row r : rows) {
-            w = Math.max(w, mc.textRenderer.getWidth(r.text));
-            h += r.bar >= 0 ? 17 : 11;
-        }
+        final int W = 232, PAD = 8, INNER = W - PAD * 2;
         int bgA = Math.max(0, Math.min(255, (int) Math.round(opacity * 2.55)));
+
+        // ---- measure ----
+        List<net.minecraft.text.OrderedText> actionLines = tr.wrapLines(net.minecraft.text.Text.literal(d.action), INNER - 16);
+        java.util.List<List<net.minecraft.text.OrderedText>> whyLines = new java.util.ArrayList<>();
+        int whyH = 0;
+        for (Ev e : d.why) {
+            List<net.minecraft.text.OrderedText> l = tr.wrapLines(net.minecraft.text.Text.literal(e.text()), INNER - 16);
+            whyLines.add(l);
+            whyH += Math.max(10, l.size() * 9 + 1) + 3;
+        }
+        int cardH = 6 + 9 + 2 + actionLines.size() * 10 + (d.dist.isEmpty() ? 0 : 11) + 6;
+        int h = PAD + 11 /*header*/ + 5 + 14 /*verdict*/ + 4 + 6 /*bar*/ + 7 + 1 + 6 + 9 /*why title*/ + 4 + whyH
+            + (d.status.isEmpty() ? 0 : 12) + 5 + cardH + PAD;
 
         float sx = mc.getWindow().getScaledWidth() / 2.0F + 14 + offX;
         float sy = mc.getWindow().getScaledHeight() / 2.0F - h * (float) scale / 2.0F + offY;
@@ -95,18 +112,74 @@ final class SusHud {
         mat.pushMatrix();
         mat.translate(sx, sy);
         mat.scale((float) scale, (float) scale);
-        ctx.fill(-5, -5, w + 5, h + 3, (bgA << 24) | 0x0C0C14);
-        ctx.fill(-5, -5, -3, h + 3, 0xFF3DD9FF); // accent bar
-        int y = 0;
-        for (Row r : rows) {
-            ctx.drawText(mc.textRenderer, r.text, 0, y, r.color, true);
-            y += 11;
-            if (r.bar >= 0) {
-                ctx.fill(0, y, w, y + 5, 0xFF2A2A33);
-                ctx.fill(0, y, (int) (w * Math.min(100, r.bar) / 100.0), y + 5, r.color);
-                y += 6;
-            }
+
+        // ---- frame: colored border, dark body ----
+        ctx.fill(0, 0, W, h, alpha(d.accent, 150));
+        ctx.fill(1, 1, W - 1, h - 1, (bgA << 24) | 0x0C0F14);
+        // clip the corners a little for a softer look
+        ctx.fill(0, 0, 2, 2, 0); 
+
+        int y = PAD;
+        // header: dot, title, best tag
+        ctx.fill(PAD, y + 2, PAD + 5, y + 7, d.accent);
+        ctx.drawText(tr, d.title, PAD + 9, y, GREY, false);
+        if (d.best) {
+            int tx = PAD + 9 + tr.getWidth(d.title) + 6;
+            ctx.fill(tx, y - 1, tx + tr.getWidth("BEST PICK") + 6, y + 9, alpha(CYAN, 45));
+            ctx.drawText(tr, "BEST PICK", tx + 3, y, CYAN, false);
         }
+        y += 16;
+
+        // verdict (bigger)
+        mat.pushMatrix();
+        mat.translate(PAD, y);
+        mat.scale(1.5F, 1.5F);
+        ctx.drawText(tr, d.verdict, 0, 0, d.accent, true);
+        mat.popMatrix();
+        y += 15;
+
+        // confidence bar + percent
+        String pct = d.conf + "%";
+        int pw = tr.getWidth(pct);
+        int barW = INNER - pw - 6;
+        ctx.fill(PAD, y + 1, PAD + barW, y + 6, 0xFF2A303A);
+        ctx.fill(PAD, y + 1, PAD + Math.max(3, (int) (barW * Math.min(100, d.conf) / 100.0)), y + 6, d.accent);
+        ctx.drawText(tr, pct, PAD + barW + 6, y - 1, WHITE, true);
+        y += 12;
+
+        // divider + section title
+        ctx.fill(PAD, y, W - PAD, y + 1, alpha(0xFFFFFF, 22));
+        y += 6;
+        ctx.drawText(tr, "WHY IT WAS FLAGGED", PAD, y, DIM, false);
+        y += 13;
+
+        // reasons
+        for (int i = 0; i < d.why.size(); i++) {
+            Ev e = d.why.get(i);
+            List<net.minecraft.text.OrderedText> lines = whyLines.get(i);
+            int rowH = Math.max(10, lines.size() * 9 + 1);
+            ctx.fill(PAD, y, PAD + 10, y + 10, alpha(e.color(), 55));
+            String sym = String.valueOf(e.symbol());
+            ctx.drawText(tr, sym, PAD + 5 - tr.getWidth(sym) / 2, y + 1, e.color(), false);
+            for (int k = 0; k < lines.size(); k++) ctx.drawText(tr, lines.get(k), PAD + 15, y + 1 + k * 9, 0xFFD5DEE8, false);
+            y += rowH + 3;
+        }
+
+        if (!d.status.isEmpty()) {
+            ctx.drawText(tr, d.status, PAD, y, d.statusColor, false);
+            y += 12;
+        }
+        y += 5;
+
+        // action card
+        ctx.fill(PAD, y, W - PAD, y + cardH, alpha(d.accent, 36));
+        ctx.fill(PAD, y, PAD + 2, y + cardH, d.accent);
+        int cy = y + 6;
+        ctx.drawText(tr, d.actionLabel, PAD + 8, cy, d.accent, false);
+        cy += 11;
+        for (net.minecraft.text.OrderedText l : actionLines) { ctx.drawText(tr, l, PAD + 8, cy, 0xFFFFFFFF, true); cy += 10; }
+        if (!d.dist.isEmpty()) ctx.drawText(tr, d.dist, PAD + 8, cy, GREY, false);
+
         mat.popMatrix();
     }
 }

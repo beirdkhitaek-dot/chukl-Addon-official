@@ -816,22 +816,18 @@ public class SusChunkFinder extends Module {
         int lvl = susLevel.getOrDefault(cp, 0);
         int pct = (int) Math.max(5, Math.min(99, 20 + Math.min(45, 45.0 * heat / (need * 3.0)) + lvl * 12));
 
-        List<SusHud.Row> rows = new ArrayList<>();
-        rows.add(SusHud.Row.of("Suspicious chunk " + cp.x + ", " + cp.z, SusHud.CYAN));
-        SusHud.Row v = SusHud.verdict(pct, false);
-        rows.add(SusHud.Row.of(v.text, v.color));
-        rows.add(new SusHud.Row("Confidence " + pct + "%", SusHud.GREY, pct));
-        rows.add(SusHud.Row.of("Why it was flagged:", SusHud.GREY));
-        rows.add(SusHud.Row.of(" + Plants stopped growing here (" + heat + ", needs " + need + ")", SusHud.WHITE));
-        if (lvl > 0) rows.add(SusHud.Row.of(" + Part of a " + (lvl == 1 ? "small" : lvl == 2 ? "medium" : "large") + " group of flagged chunks", SusHud.WHITE));
+        SusHud.Data d = new SusHud.Data();
+        d.title = "Suspicious chunk " + cp.x + ", " + cp.z;
+        SusHud.applyVerdict(d, pct, false);
+        d.why.add(new SusHud.Ev('+', SusHud.GREEN, "Plants stopped growing here (" + heat + ", needs " + need + ")"));
+        if (lvl > 0) d.why.add(new SusHud.Ev('+', SusHud.GREEN, "Part of a " + (lvl == 1 ? "small" : lvl == 2 ? "medium" : "large") + " group of flagged chunks"));
         int cov = tracked.getOrDefault(cp, 0);
-        if (cov > 0) rows.add(SusHud.Row.of(" - Plants nearby did grow (" + cov + "), so it may be noise", SusHud.ORANGE));
+        if (cov > 0) d.why.add(new SusHud.Ev('-', SusHud.ORANGE, "Plants nearby did grow (" + cov + "), so it may be noise"));
         double dist = Math.hypot(cp.getStartX() + 8 - mc.player.getX(), cp.getStartZ() + 8 - mc.player.getZ());
-        rows.add(SusHud.Row.of("", SusHud.GREY));
-        rows.add(SusHud.Row.of("Next: search near X " + (cp.getStartX() + 8) + "  Z " + (cp.getStartZ() + 8), SusHud.CYAN));
-        rows.add(SusHud.Row.of((int) dist + " blocks away", SusHud.GREY));
+        d.action = "Search near X " + (cp.getStartX() + 8) + "  Z " + (cp.getStartZ() + 8);
+        d.dist = (int) dist + " blocks away";
 
-        SusHud.draw(event.drawContext, rows, hudSize.get(), hudOpacity.get(), hudOffX.get(), hudOffY.get());
+        SusHud.draw(event.drawContext, d, hudSize.get(), hudOpacity.get(), hudOffX.get(), hudOffY.get());
     }
 
     @EventHandler
