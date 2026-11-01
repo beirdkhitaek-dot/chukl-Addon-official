@@ -336,7 +336,7 @@ public class SusChunkFinder extends Module {
     private final Map<ChunkPos, WorldChunk> seenChunks = new java.util.HashMap<>();
 
     public SusChunkFinder() {
-        super(ChuklAddon.CATEGORY, "sus-chunk-finder", "Finds probable base locations using plant/amethyst growth and rotated deepslate.");
+        super(ChuklAddon.CATEGORY, "chukl-sus-chunk", "Finds probable base locations using plant/amethyst growth and rotated deepslate.");
     }
 
     @Override

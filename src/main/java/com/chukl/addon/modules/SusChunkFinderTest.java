@@ -915,7 +915,7 @@ public class SusChunkFinderTest extends Module {
     private final Map<ChunkPos, WorldChunk> seenChunks = new java.util.HashMap<>();
 
     public SusChunkFinderTest() {
-        super(ChuklAddon.CATEGORY, "sus-chunk-finder-test", "TEST copy of Sus Chunk Finder: renders only the best chunk(s) as a dig-down column + beam, and scans Y29 to -64 for player-made blocks.");
+        super(ChuklAddon.CATEGORY, "chukl-sus-chunk-test", "TEST copy of Sus Chunk Finder: renders only the best chunk(s) as a dig-down column + beam, and scans Y29 to -64 for player-made blocks.");
     }
 
     @Override

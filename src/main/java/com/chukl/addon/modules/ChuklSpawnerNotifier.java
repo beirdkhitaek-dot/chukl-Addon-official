@@ -250,7 +250,7 @@ public class ChuklSpawnerNotifier extends Module {
     private int timer;
 
     public ChuklSpawnerNotifier() {
-        super(ChuklAddon.CATEGORY, "spawner-notifier",
+        super(ChuklAddon.CATEGORY, "chukl-spawner-notifier",
             "Detects unnatural / player-placed spawners, tells you the mob and marks them with a colored lightning beam.");
     }
 
