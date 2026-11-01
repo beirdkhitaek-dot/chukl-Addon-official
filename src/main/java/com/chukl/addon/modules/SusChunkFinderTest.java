@@ -1951,27 +1951,52 @@ public class SusChunkFinderTest extends Module {
         ChunkPos cp = SusHud.lookedChunk(sus.keySet(), hudDistance.get(), -64, 320);
         if (cp == null) return;
 
-        List<String> lines = new ArrayList<>();
-        boolean best = bestChunks.contains(cp);
-        lines.add("Sus chunk " + cp.x + ", " + cp.z + (best ? "  [BEST]" : ""));
-        BlockPos t = digTarget(cp);
-        lines.add("Dig spot: X " + t.getX() + "  Z " + t.getZ());
-        double dist = Math.hypot(cp.getStartX() + 8 - mc.player.getX(), cp.getStartZ() + 8 - mc.player.getZ());
-        lines.add("Distance: " + (int) dist + " blocks");
-        lines.add("Heat: " + heatmap.getOrDefault(cp, 0) + "  (needs " + effectiveSensitivity() + ")");
-        lines.add("Score: " + (int) rank(cp, susLevel) + "   zone level: " + susLevel.getOrDefault(cp, 0));
-        int ug = ugScores.getOrDefault(cp, 0), lb = lightScores.getOrDefault(cp, 0), dp = deepScores.getOrDefault(cp, 0);
-        if (ug > 0) lines.add("Underground blocks: " + ug + (blocksHidden && adaptive.get() ? " (ignored: hidden)" : ""));
-        if (lb > 0) lines.add("Lit room (box): " + lb);
-        if (dp > 0) lines.add("Deep light: " + dp + (lavaNear(cp) ? " (lava nearby)" : ""));
+        int need = Math.max(1, effectiveSensitivity());
+        int heat = heatmap.getOrDefault(cp, 0);
+        int lvl = susLevel.getOrDefault(cp, 0);
+        int ug = blocksHidden && adaptive.get() ? 0 : ugScores.getOrDefault(cp, 0);
+        int lb = lightScores.getOrDefault(cp, 0), dp = deepScores.getOrDefault(cp, 0);
         boolean nat = naturalZone.contains(cp) || natMask.containsKey(cp);
-        lines.add("Natural structure: " + (nat ? "yes (likely natural)" : "no"));
-        if (verifying != null && verifying.equals(cp) && verifyTotal > 0)
-            lines.add("Verifying: " + Math.min(99, (int) (verifyDone.get() * 100L / verifyTotal)) + "%");
-        else if (confirmed.contains(cp)) lines.add("Verified: yes");
-        if (blocksHidden) lines.add("Server hides blocks: " + hiddenKind);
+        boolean ok = confirmed.contains(cp);
 
-        SusHud.draw(event.drawContext, lines, hudSize.get(), hudOpacity.get(), hudOffX.get(), hudOffY.get());
+        // confidence: how much independent evidence points at this chunk
+        double conf = 15;
+        if (heat >= need) conf += Math.min(30, 30.0 * heat / (need * 3.0));
+        if (ug > 0) conf += Math.min(22, 22.0 * ug / (ugThreshold.get() * 2.0));
+        if (lb > 0) conf += 15;
+        if (dp > 0) conf += 8;
+        if (lvl >= 2) conf += 8;
+        if (ok) conf += 15;
+        if (nat) conf -= 40;
+        int pct = (int) Math.max(5, Math.min(99, Math.round(conf)));
+
+        List<SusHud.Row> rows = new ArrayList<>();
+        boolean best = bestChunks.contains(cp);
+        rows.add(SusHud.Row.of("Suspicious chunk " + cp.x + ", " + cp.z + (best ? "   * best pick" : ""), SusHud.CYAN));
+        SusHud.Row v = SusHud.verdict(pct, nat);
+        rows.add(SusHud.Row.of(v.text, v.color));
+        rows.add(new SusHud.Row("Confidence " + pct + "%", SusHud.GREY, pct));
+
+        rows.add(SusHud.Row.of("Why it was flagged:", SusHud.GREY));
+        boolean any = false;
+        if (heat >= need) { rows.add(SusHud.Row.of(" + Plants stopped growing here (" + heat + ", needs " + need + ")", SusHud.WHITE)); any = true; }
+        if (ug > 0) { rows.add(SusHud.Row.of(" + Player-made blocks underground (score " + ug + ")", SusHud.WHITE)); any = true; }
+        if (lb > 0) { rows.add(SusHud.Row.of(" + Lit rectangular room underground", SusHud.WHITE)); any = true; }
+        if (dp > 0) { rows.add(SusHud.Row.of(" + Odd light deep underground" + (lavaNear(cp) ? " (lava near, weaker)" : ""), SusHud.WHITE)); any = true; }
+        if (!any) rows.add(SusHud.Row.of(" + Nearby chunks show activity", SusHud.WHITE));
+        if (nat) rows.add(SusHud.Row.of(" - Looks like a natural structure", SusHud.RED));
+        if (blocksHidden) rows.add(SusHud.Row.of(" ! Server hides underground blocks, using light instead", SusHud.ORANGE));
+
+        BlockPos t = digTarget(cp);
+        double dist = Math.hypot(cp.getStartX() + 8 - mc.player.getX(), cp.getStartZ() + 8 - mc.player.getZ());
+        rows.add(SusHud.Row.of("", SusHud.GREY));
+        if (verifying != null && verifying.equals(cp) && verifyTotal > 0)
+            rows.add(SusHud.Row.of("Checking it again... " + Math.min(99, (int) (verifyDone.get() * 100L / verifyTotal)) + "%", SusHud.YELLOW));
+        else if (ok) rows.add(SusHud.Row.of("Double-checked: still looks real", SusHud.GREEN));
+        rows.add(SusHud.Row.of("Next: dig down at X " + t.getX() + "  Z " + t.getZ(), SusHud.CYAN));
+        rows.add(SusHud.Row.of((int) dist + " blocks away", SusHud.GREY));
+
+        SusHud.draw(event.drawContext, rows, hudSize.get(), hudOpacity.get(), hudOffX.get(), hudOffY.get());
     }
 
     // ---------- verification ----------

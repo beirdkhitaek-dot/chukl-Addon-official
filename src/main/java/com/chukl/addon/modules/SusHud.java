@@ -50,14 +50,42 @@ final class SusHud {
         return tMin;
     }
 
-    /** Draws a panel next to the crosshair. opacity is 0-100. */
-    static void draw(DrawContext ctx, List<String> lines, double scale, int opacity, int offX, int offY) {
-        MinecraftClient mc = MinecraftClient.getInstance();
-        if (lines.isEmpty() || mc.textRenderer == null) return;
+    /** One line of the panel. bar >= 0 draws a progress bar (0-100) under the text. */
+    static final class Row {
+        final String text;
+        final int color;
+        final int bar;
+        Row(String text, int color, int bar) { this.text = text; this.color = color; this.bar = bar; }
+        static Row of(String t, int c) { return new Row(t, c, -1); }
+    }
 
-        int w = 0;
-        for (String l : lines) w = Math.max(w, mc.textRenderer.getWidth(l));
-        int h = lines.size() * 10;
+    static final int WHITE = 0xFFE6E6E6, GREY = 0xFF9AA0A6, CYAN = 0xFF3DD9FF, GREEN = 0xFF4CE06A,
+        YELLOW = 0xFFFFD84D, ORANGE = 0xFFFF9A3D, RED = 0xFFFF5C5C;
+
+    /** Plain-language verdict for a 0-100 confidence. */
+    static Row verdict(int conf, boolean natural) {
+        if (natural) return Row.of("PROBABLY NATURAL", RED);
+        if (conf >= 70) return Row.of("VERY LIKELY A BASE", GREEN);
+        if (conf >= 45) return Row.of("LIKELY A BASE", YELLOW);
+        if (conf >= 25) return Row.of("MAYBE - CHECK IT", ORANGE);
+        return Row.of("WEAK SIGNAL", RED);
+    }
+
+    static int barColor(int conf) {
+        return conf >= 70 ? GREEN : conf >= 45 ? YELLOW : conf >= 25 ? ORANGE : RED;
+    }
+
+    /** Draws a panel next to the crosshair. opacity is 0-100. */
+    static void draw(DrawContext ctx, List<Row> rows, double scale, int opacity, int offX, int offY) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (rows.isEmpty() || mc.textRenderer == null) return;
+
+        int w = 150;
+        int h = 0;
+        for (Row r : rows) {
+            w = Math.max(w, mc.textRenderer.getWidth(r.text));
+            h += r.bar >= 0 ? 17 : 11;
+        }
         int bgA = Math.max(0, Math.min(255, (int) Math.round(opacity * 2.55)));
 
         float sx = mc.getWindow().getScaledWidth() / 2.0F + 14 + offX;
@@ -67,10 +95,17 @@ final class SusHud {
         mat.pushMatrix();
         mat.translate(sx, sy);
         mat.scale((float) scale, (float) scale);
-        ctx.fill(-4, -4, w + 4, h + 3, (bgA << 24) | 0x0C0C14);
-        ctx.fill(-4, -4, -2, h + 3, 0xFF3DD9FF); // accent bar
-        for (int i = 0; i < lines.size(); i++) {
-            ctx.drawText(mc.textRenderer, lines.get(i), 0, i * 10, i == 0 ? 0xFF3DD9FF : 0xFFE6E6E6, true);
+        ctx.fill(-5, -5, w + 5, h + 3, (bgA << 24) | 0x0C0C14);
+        ctx.fill(-5, -5, -3, h + 3, 0xFF3DD9FF); // accent bar
+        int y = 0;
+        for (Row r : rows) {
+            ctx.drawText(mc.textRenderer, r.text, 0, y, r.color, true);
+            y += 11;
+            if (r.bar >= 0) {
+                ctx.fill(0, y, w, y + 5, 0xFF2A2A33);
+                ctx.fill(0, y, (int) (w * Math.min(100, r.bar) / 100.0), y + 5, r.color);
+                y += 6;
+            }
         }
         mat.popMatrix();
     }

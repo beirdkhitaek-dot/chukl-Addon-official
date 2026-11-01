@@ -811,18 +811,27 @@ public class SusChunkFinder extends Module {
         ChunkPos cp = SusHud.lookedChunk(sus.keySet(), hudDistance.get(), -64, 320);
         if (cp == null) return;
 
-        List<String> lines = new ArrayList<>();
-        lines.add("Sus chunk " + cp.x + ", " + cp.z);
-        lines.add("Center: X " + (cp.getStartX() + 8) + "  Z " + (cp.getStartZ() + 8));
-        double dist = Math.hypot(cp.getStartX() + 8 - mc.player.getX(), cp.getStartZ() + 8 - mc.player.getZ());
-        lines.add("Distance: " + (int) dist + " blocks");
-        lines.add("Heat: " + heatmap.getOrDefault(cp, 0) + "  (needs " + effectiveSensitivity() + ")");
-        lines.add("Flagged strength: " + sus.getOrDefault(cp, 0));
+        int need = Math.max(1, effectiveSensitivity());
+        int heat = heatmap.getOrDefault(cp, 0);
         int lvl = susLevel.getOrDefault(cp, 0);
-        if (lvl > 0) lines.add("Zone level: " + (lvl == 1 ? "low" : lvl == 2 ? "medium" : "high"));
-        lines.add("Chunks already covered nearby: " + tracked.getOrDefault(cp, 0));
+        int pct = (int) Math.max(5, Math.min(99, 20 + Math.min(45, 45.0 * heat / (need * 3.0)) + lvl * 12));
 
-        SusHud.draw(event.drawContext, lines, hudSize.get(), hudOpacity.get(), hudOffX.get(), hudOffY.get());
+        List<SusHud.Row> rows = new ArrayList<>();
+        rows.add(SusHud.Row.of("Suspicious chunk " + cp.x + ", " + cp.z, SusHud.CYAN));
+        SusHud.Row v = SusHud.verdict(pct, false);
+        rows.add(SusHud.Row.of(v.text, v.color));
+        rows.add(new SusHud.Row("Confidence " + pct + "%", SusHud.GREY, pct));
+        rows.add(SusHud.Row.of("Why it was flagged:", SusHud.GREY));
+        rows.add(SusHud.Row.of(" + Plants stopped growing here (" + heat + ", needs " + need + ")", SusHud.WHITE));
+        if (lvl > 0) rows.add(SusHud.Row.of(" + Part of a " + (lvl == 1 ? "small" : lvl == 2 ? "medium" : "large") + " group of flagged chunks", SusHud.WHITE));
+        int cov = tracked.getOrDefault(cp, 0);
+        if (cov > 0) rows.add(SusHud.Row.of(" - Plants nearby did grow (" + cov + "), so it may be noise", SusHud.ORANGE));
+        double dist = Math.hypot(cp.getStartX() + 8 - mc.player.getX(), cp.getStartZ() + 8 - mc.player.getZ());
+        rows.add(SusHud.Row.of("", SusHud.GREY));
+        rows.add(SusHud.Row.of("Next: search near X " + (cp.getStartX() + 8) + "  Z " + (cp.getStartZ() + 8), SusHud.CYAN));
+        rows.add(SusHud.Row.of((int) dist + " blocks away", SusHud.GREY));
+
+        SusHud.draw(event.drawContext, rows, hudSize.get(), hudOpacity.get(), hudOffX.get(), hudOffY.get());
     }
 
     @EventHandler
