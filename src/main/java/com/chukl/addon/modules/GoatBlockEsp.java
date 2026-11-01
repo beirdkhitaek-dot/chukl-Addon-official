@@ -33,10 +33,10 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Chukl Block ESP: highlights the blocks you pick, only inside the Y range you choose.
+ * Goat Block ESP: highlights the blocks you pick, only inside the Y range you choose.
  * Boxes and tracers each choose their own color source: the block's own color, or one custom color.
  */
-public class ChuklBlockEsp extends Module {
+public class GoatBlockEsp extends Module {
     public enum ColorMode { Block_Color, Custom }
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -113,8 +113,8 @@ public class ChuklBlockEsp extends Module {
     private int tick = 0;
     private int lastSig = 0;
 
-    public ChuklBlockEsp() {
-        super(ChuklAddon.RENDER_CATEGORY, "chukl-block-esp",
+    public GoatBlockEsp() {
+        super(ChuklAddon.RENDER_CATEGORY, "goat-block-esp",
             "Highlights the blocks you pick inside a Y range. Boxes and tracers can each use block colors or a custom color.");
     }
 

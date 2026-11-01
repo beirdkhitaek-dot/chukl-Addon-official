@@ -3,7 +3,7 @@ package com.chukl.addon;
 import com.chukl.addon.modules.DeepBlockEntityEsp;
 import com.chukl.addon.modules.DugOutHighlighter;
 import com.chukl.addon.modules.LightFinder;
-import com.chukl.addon.modules.ChuklBlockEsp;
+import com.chukl.addon.modules.GoatBlockEsp;
 import com.chukl.addon.modules.FrostStorageEsp;
 import com.chukl.addon.modules.GoodRoad;
 import com.chukl.addon.modules.GrenadeCallout;
@@ -64,7 +64,7 @@ public class ChuklAddon extends MeteorAddon {
         Modules.get().add(new GoodRoad());
 
         Modules.get().add(new FrostStorageEsp());
-        Modules.get().add(new ChuklBlockEsp());
+        Modules.get().add(new GoatBlockEsp());
 
         // Chukl Visual category
         Modules.get().add(new GrenadeCallout());
