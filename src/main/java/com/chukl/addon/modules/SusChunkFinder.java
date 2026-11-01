@@ -1,6 +1,7 @@
 package com.chukl.addon.modules;
 
 import com.chukl.addon.ChuklAddon;
+import meteordevelopment.meteorclient.events.render.Render2DEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
@@ -61,6 +62,29 @@ public class SusChunkFinder extends Module {
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgRender = settings.createGroup("Render");
+    private final SettingGroup sgHud = settings.createGroup("Target HUD");
+
+    private final Setting<Boolean> hudOn = sgHud.add(new BoolSetting.Builder()
+        .name("target-hud").description("Show details about the sus chunk you are looking at.")
+        .defaultValue(true).build());
+
+    private final Setting<Integer> hudOpacity = sgHud.add(new IntSetting.Builder()
+        .name("hud-opacity").description("Panel background opacity in percent.")
+        .defaultValue(70).min(0).sliderMax(100).build());
+
+    private final Setting<Double> hudSize = sgHud.add(new DoubleSetting.Builder()
+        .name("hud-size").description("Panel size.")
+        .defaultValue(1.0).min(0.3).sliderMax(3.0).build());
+
+    private final Setting<Integer> hudDistance = sgHud.add(new IntSetting.Builder()
+        .name("hud-distance").description("How far away a chunk can be and still show its panel.")
+        .defaultValue(200).min(16).sliderMax(500).build());
+
+    private final Setting<Integer> hudOffX = sgHud.add(new IntSetting.Builder()
+        .name("hud-offset-x").defaultValue(0).sliderRange(-300, 300).build());
+
+    private final Setting<Integer> hudOffY = sgHud.add(new IntSetting.Builder()
+        .name("hud-offset-y").defaultValue(0).sliderRange(-300, 300).build());
 
     // --- General (same list and order as Krypton) ---
 
@@ -769,6 +793,29 @@ public class SusChunkFinder extends Module {
         info("Chunk " + cp.x + ", " + cp.z + ": heat " + heat + " (needs " + effectiveSensitivity() + "), covered by grown plants "
             + cover + ", loaded neighbors " + neighbors + " (needs 3), own growing count " + growthCounts.getOrDefault(cp, 0)
             + ", flagged " + susChunks.containsKey(cp));
+    }
+
+    @EventHandler
+    private void onHud(Render2DEvent event) {
+        if (!hudOn.get() || mc.player == null || mc.world == null || mc.options.hudHidden) return;
+        Map<ChunkPos, Integer> sus = susChunks;
+        if (sus.isEmpty()) return;
+
+        ChunkPos cp = SusHud.lookedChunk(sus.keySet(), hudDistance.get(), -64, 320);
+        if (cp == null) return;
+
+        List<String> lines = new ArrayList<>();
+        lines.add("Sus chunk " + cp.x + ", " + cp.z);
+        lines.add("Center: X " + (cp.getStartX() + 8) + "  Z " + (cp.getStartZ() + 8));
+        double dist = Math.hypot(cp.getStartX() + 8 - mc.player.getX(), cp.getStartZ() + 8 - mc.player.getZ());
+        lines.add("Distance: " + (int) dist + " blocks");
+        lines.add("Heat: " + heatmap.getOrDefault(cp, 0) + "  (needs " + effectiveSensitivity() + ")");
+        lines.add("Flagged strength: " + sus.getOrDefault(cp, 0));
+        int lvl = susLevel.getOrDefault(cp, 0);
+        if (lvl > 0) lines.add("Zone level: " + (lvl == 1 ? "low" : lvl == 2 ? "medium" : "high"));
+        lines.add("Chunks already covered nearby: " + tracked.getOrDefault(cp, 0));
+
+        SusHud.draw(event.drawContext, lines, hudSize.get(), hudOpacity.get(), hudOffX.get(), hudOffY.get());
     }
 
     @EventHandler

@@ -2,6 +2,7 @@ package com.chukl.addon.modules;
 
 import com.chukl.addon.ChuklAddon;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
+import meteordevelopment.meteorclient.events.render.Render2DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.settings.BoolSetting;
@@ -84,6 +85,7 @@ public class SusChunkFinderTest extends Module {
     private final SettingGroup sgUg = settings.createGroup("Underground");
     private final SettingGroup sgAdapt = settings.createGroup("Adaptive");
     private final SettingGroup sgLight = settings.createGroup("Light (experimental)");
+    private final SettingGroup sgHud = settings.createGroup("Target HUD");
 
     // --- General (same list and order as Krypton) ---
 
@@ -532,6 +534,36 @@ public class SusChunkFinderTest extends Module {
         .build()
     );
 
+    private final Setting<Boolean> hudOn = sgHud.add(new BoolSetting.Builder()
+        .name("target-hud").description("Show details about the sus chunk you are looking at.")
+        .defaultValue(true).build());
+
+    private final Setting<Integer> hudOpacity = sgHud.add(new IntSetting.Builder()
+        .name("hud-opacity").description("Panel background opacity in percent.")
+        .defaultValue(70).min(0).sliderMax(100).build());
+
+    private final Setting<Double> hudSize = sgHud.add(new DoubleSetting.Builder()
+        .name("hud-size").description("Panel size.")
+        .defaultValue(1.0).min(0.3).sliderMax(3.0).build());
+
+    private final Setting<Integer> hudDistance = sgHud.add(new IntSetting.Builder()
+        .name("hud-distance").description("How far away a chunk can be and still show its panel.")
+        .defaultValue(200).min(16).sliderMax(500).build());
+
+    private final Setting<Integer> hudOffX = sgHud.add(new IntSetting.Builder()
+        .name("hud-offset-x").defaultValue(0).sliderRange(-300, 300).build());
+
+    private final Setting<Integer> hudOffY = sgHud.add(new IntSetting.Builder()
+        .name("hud-offset-y").defaultValue(0).sliderRange(-300, 300).build());
+
+    private final Setting<Boolean> lightIgnoreNatural = sgLight.add(new BoolSetting.Builder()
+        .name("light-ignore-natural")
+        .description("Ignore light that a natural source can explain (lava, magma, glow lichen, glow berries, amethyst, shroomlight, "
+            + "caves with lava) and light inside natural structures. Only light that is brighter than any nearby natural source counts.")
+        .defaultValue(true)
+        .build()
+    );
+
     private final Setting<Boolean> deepSignal = sgLight.add(new BoolSetting.Builder()
         .name("deep-light-signal")
         .description("EXPERIMENTAL: counts lit blocks in the deep range as underground evidence. Very little is lit down there naturally, so a few lit blocks point to torches or lamps. Chunks within one chunk of lava are skipped, because lava lights its surroundings by itself. Overworld only.")
@@ -738,6 +770,15 @@ public class SusChunkFinderTest extends Module {
     private long lastAnnounceAt;
     private String lastAdaptMsg = "";
     private volatile List<ChunkPos> bestChunks = List.of();
+
+    // anti-xray / hidden underground probe
+    private volatile boolean blocksHidden = false;
+    private volatile String hiddenKind = "";
+    private final Set<ChunkPos> probed = ConcurrentHashMap.newKeySet();
+    private final AtomicInteger probeOres = new AtomicInteger();
+    private final AtomicInteger probeEmbedded = new AtomicInteger();
+    private final AtomicInteger probeSolid = new AtomicInteger();
+    private final AtomicInteger probeChunks = new AtomicInteger();
 
     // verification (real progress: sections actually read / sections that will be read)
     private final Set<ChunkPos> rejected = ConcurrentHashMap.newKeySet();
@@ -953,6 +994,13 @@ public class SusChunkFinderTest extends Module {
         lastAnnounced = null;
         rejected.clear();
         confirmed.clear();
+        probed.clear();
+        probeOres.set(0);
+        probeEmbedded.set(0);
+        probeSolid.set(0);
+        probeChunks.set(0);
+        blocksHidden = false;
+        hiddenKind = "";
         verifying = null;
         verifyTotal = 0;
         verifyDone.set(0);
@@ -1357,6 +1405,7 @@ public class SusChunkFinderTest extends Module {
         }
 
         scanNewChunks();
+        probeHidden();
 
         if (debugInfo.get() && mc.player.age % 40 == 0) printDebug();
         if (mc.player.age % 100 == 0) announceAdaptation();
@@ -1398,7 +1447,7 @@ public class SusChunkFinderTest extends Module {
         naturalZone = zone;
 
         // underground light: analyse a chunk a few seconds after it was scanned, once its light data has arrived
-        if ((lightBox.get() || lightEsp.get() || deepSignal.get()) && isOverworld(world)) {
+        if ((lightBox.get() || lightEsp.get() || deepSignal.get() || (blocksHidden && adaptive.get())) && isOverworld(world)) {
             long now = System.currentTimeMillis();
             int budget = 4;
             for (Map.Entry<ChunkPos, Long> e : scannedAt.entrySet()) {
@@ -1416,7 +1465,7 @@ public class SusChunkFinderTest extends Module {
         scannedAt.keySet().removeIf(c -> !seenChunks.containsKey(c));
 
         Set<ChunkPos> ugStrong = new HashSet<>();
-        if ((ugDetect.get() || lightBox.get() || deepSignal.get()) && ugFlagsChunks.get()) {
+        if ((ugDetect.get() || lightBox.get() || deepSignal.get() || (blocksHidden && adaptive.get())) && ugFlagsChunks.get()) {
             int thr = ugThreshold.get();
             Set<ChunkPos> keys = new HashSet<>(ugScores.keySet());
             keys.addAll(lightScores.keySet());
@@ -1523,7 +1572,8 @@ public class SusChunkFinderTest extends Module {
     private int effUg(ChunkPos c) {
         int deep = deepScores.getOrDefault(c, 0);
         if (deep > 0 && lavaNear(c)) deep = 0; // lava lights its surroundings by itself
-        int score = ugScores.getOrDefault(c, 0) + lightScores.getOrDefault(c, 0) + deep;
+        int blockScore = blocksHidden && adaptive.get() ? 0 : ugScores.getOrDefault(c, 0); // fake/hidden blocks cannot be trusted
+        int score = blockScore + lightScores.getOrDefault(c, 0) + deep;
         if (score <= 0) return 0;
         if (ignoreNatural.get() && naturalZone.contains(c) && score < ugThreshold.get() * 3) return 0;
         return score;
@@ -1539,16 +1589,17 @@ public class SusChunkFinderTest extends Module {
     }
 
     private record LightOpts(boolean box, int minLight, int minSize, int ratio, int minLayers, int ugMin, int ugMax,
-                             boolean esp, int espMin, boolean deep, int deepMin, int deepMinY, int deepMaxY) {}
+                             boolean esp, int espMin, boolean deep, int deepMin, int deepMinY, int deepMaxY, boolean natural) {}
 
     private void queueLight(ClientWorld world, WorldChunk chunk) {
         ExecutorService[] pool = executors;
         if (pool == null) return;
 
-        LightOpts o = new LightOpts(lightBox.get(), lightMin.get(), boxMinSize.get(), boxShape.get(), boxLayers.get(),
+        boolean force = blocksHidden && adaptive.get();
+        LightOpts o = new LightOpts(lightBox.get() || force, lightMin.get(), boxMinSize.get(), boxShape.get(), boxLayers.get(),
             Math.min(ugMinY.get(), ugMaxY.get()), Math.max(ugMinY.get(), ugMaxY.get()),
-            lightEsp.get(), espMinLight.get(), deepSignal.get(), deepMinLight.get(),
-            Math.min(deepMinY.get(), deepMaxY.get()), Math.max(deepMinY.get(), deepMaxY.get()));
+            lightEsp.get(), espMinLight.get(), deepSignal.get() || force, deepMinLight.get(),
+            Math.min(deepMinY.get(), deepMaxY.get()), Math.max(deepMinY.get(), deepMaxY.get()), lightIgnoreNatural.get());
 
         ChunkPos pos = chunk.getPos();
         pool[Math.floorMod(pos.x * 31 + pos.z, pool.length)].execute(() -> {
@@ -1558,6 +1609,144 @@ public class SusChunkFinderTest extends Module {
                 ChuklAddon.LOG.error("Sus Chunk Finder Test light scan failed", t);
             }
         });
+    }
+
+    /** Light level a natural block gives off (0 = not a natural light source). */
+    private static int natLight(BlockState s) {
+        Block b = s.getBlock();
+        if (b == Blocks.LAVA) return 15;
+        if (b == Blocks.MAGMA_BLOCK) return 3;
+        if (b == Blocks.GLOW_LICHEN) return 7;
+        if (b == Blocks.SHROOMLIGHT || b == Blocks.GLOWSTONE || b == Blocks.FIRE) return 15;
+        if (b == Blocks.SOUL_FIRE) return 10;
+        if (b == Blocks.CRYING_OBSIDIAN) return 10;
+        if (b == Blocks.SCULK_CATALYST) return 6;
+        if (b == Blocks.AMETHYST_CLUSTER) return 5;
+        if (b == Blocks.LARGE_AMETHYST_BUD) return 4;
+        if (b == Blocks.MEDIUM_AMETHYST_BUD) return 2;
+        if (b == Blocks.SMALL_AMETHYST_BUD) return 1;
+        if ((b == Blocks.CAVE_VINES || b == Blocks.CAVE_VINES_PLANT) && s.contains(Properties.BERRIES) && s.get(Properties.BERRIES)) return 14;
+        return 0;
+    }
+
+    /** Natural light sources in this chunk and its 8 neighbours: {x, y, z, level}. */
+    private List<int[]> gatherEmitters(ClientWorld world, ChunkPos cp, int lo, int hi) {
+        List<int[]> out = new ArrayList<>();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                WorldChunk c = world.getChunkManager().getWorldChunk(cp.x + dx, cp.z + dz);
+                if (c == null) continue;
+                ChunkSection[] sections = c.getSectionArray();
+                int bottom = c.getBottomY();
+                for (int i = 0; i < sections.length; i++) {
+                    int sy = bottom + i * 16;
+                    if (sy + 15 < lo - 15 || sy > hi + 15) continue;
+                    ChunkSection sec = sections[i];
+                    if (sec == null || sec.isEmpty() || !sec.hasAny(st -> natLight(st) > 0)) continue;
+                    for (int y = 0; y < 16; y++) for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
+                        int e = natLight(sec.getBlockState(x, y, z));
+                        if (e > 0 && out.size() < 3000) out.add(new int[]{c.getPos().getStartX() + x, sy + y, c.getPos().getStartZ() + z, e});
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    /** True when a natural source close enough could have produced this light level. */
+    private static boolean explainedByNature(int x, int y, int z, int level, List<int[]> emitters) {
+        for (int[] e : emitters) {
+            int d = Math.abs(e[0] - x) + Math.abs(e[1] - y) + Math.abs(e[2] - z);
+            if (e[3] - d >= level) return true;
+        }
+        return false;
+    }
+
+    private static boolean isOre(Block b) {
+        return b == Blocks.COAL_ORE || b == Blocks.DEEPSLATE_COAL_ORE || b == Blocks.IRON_ORE || b == Blocks.DEEPSLATE_IRON_ORE
+            || b == Blocks.COPPER_ORE || b == Blocks.DEEPSLATE_COPPER_ORE || b == Blocks.GOLD_ORE || b == Blocks.DEEPSLATE_GOLD_ORE
+            || b == Blocks.REDSTONE_ORE || b == Blocks.DEEPSLATE_REDSTONE_ORE || b == Blocks.LAPIS_ORE || b == Blocks.DEEPSLATE_LAPIS_ORE
+            || b == Blocks.DIAMOND_ORE || b == Blocks.DEEPSLATE_DIAMOND_ORE || b == Blocks.EMERALD_ORE || b == Blocks.DEEPSLATE_EMERALD_ORE;
+    }
+
+    /**
+     * Anti-xray probe. Samples a few chunks and measures the ores below Y16:
+     * - ores that never sit buried (no air touching them) = the server only sends exposed ores (hidden underground),
+     * - far too many ores = the server mixes fake ores into the hidden blocks.
+     * In both cases block based underground detection cannot be trusted, so light signals take over.
+     */
+    private void probeHidden() {
+        if (!adaptive.get() || mc.world == null || mc.player == null || executors == null) return;
+        if (mc.player.age % 20 != 0 || probeChunks.get() >= 20 || !isOverworld(mc.world)) return;
+
+        ChunkPos here = mc.player.getChunkPos();
+        ClientWorld world = mc.world;
+        for (ChunkPos cp : loadedChunks) {
+            if (Math.max(Math.abs(cp.x - here.x), Math.abs(cp.z - here.z)) > 6) continue;
+            if (!probed.add(cp)) continue;
+            WorldChunk chunk = world.getChunkManager().getWorldChunk(cp.x, cp.z);
+            if (chunk == null) continue;
+            executors[Math.floorMod(cp.x * 31 + cp.z, executors.length)].execute(() -> {
+                try {
+                    probeChunk(world, chunk);
+                } catch (Throwable ignored) {
+                }
+            });
+            break; // one chunk per second keeps it light
+        }
+    }
+
+    private void probeChunk(ClientWorld world, WorldChunk chunk) {
+        if (world != mc.world) return;
+        ChunkSection[] sections = chunk.getSectionArray();
+        int bottom = chunk.getBottomY();
+        ChunkPos cp = chunk.getPos();
+        BlockPos.Mutable m = new BlockPos.Mutable();
+        int ores = 0, embedded = 0, solid = 0;
+        for (int i = 0; i < sections.length; i++) {
+            int sy = bottom + i * 16;
+            if (sy > 15 || sy + 15 < -64) continue;
+            ChunkSection sec = sections[i];
+            if (sec == null || sec.isEmpty()) continue;
+            for (int y = 0; y < 16; y++) {
+                int by = sy + y;
+                if (by > 15) continue;
+                for (int z = 0; z < 16; z++) for (int x = 0; x < 16; x++) {
+                    BlockState st = sec.getBlockState(x, y, z);
+                    if (st.isAir()) continue;
+                    solid++;
+                    if (!isOre(st.getBlock())) continue;
+                    ores++;
+                    boolean touchesAir = false;
+                    for (net.minecraft.util.math.Direction d : net.minecraft.util.math.Direction.values()) {
+                        if (world.getBlockState(m.set(cp.getStartX() + x, by, cp.getStartZ() + z).offset(d)).isAir()) { touchesAir = true; break; }
+                    }
+                    if (!touchesAir) embedded++;
+                }
+            }
+        }
+        probeOres.addAndGet(ores);
+        probeEmbedded.addAndGet(embedded);
+        probeSolid.addAndGet(solid);
+        int n = probeChunks.incrementAndGet();
+        if (n < 12) return;
+
+        int totalOres = probeOres.get(), totalSolid = Math.max(1, probeSolid.get());
+        double embeddedRatio = totalOres == 0 ? 0 : probeEmbedded.get() / (double) totalOres;
+        double density = totalOres / (double) totalSolid;
+        String kind = "";
+        if (totalSolid > 200000 && totalOres < 20) kind = "all underground ores hidden";
+        else if (totalOres >= 20 && embeddedRatio < 0.10) kind = "only air-exposed ores are sent (anti-xray)";
+        else if (density > 0.06) kind = "fake ores mixed in (anti-xray)";
+        boolean hidden = !kind.isEmpty();
+        if (hidden != blocksHidden) {
+            blocksHidden = hidden;
+            hiddenKind = kind;
+            String msg = hidden
+                ? "This server hides underground blocks: " + kind + ". Block based underground detection is switched off here and light detection takes over."
+                : "";
+            if (hidden) mc.execute(() -> info(msg));
+        }
     }
 
     /**
@@ -1584,6 +1773,7 @@ public class SusChunkFinderTest extends Module {
         int startX = cp.getStartX(), startZ = cp.getStartZ();
         BlockPos.Mutable m = new BlockPos.Mutable();
         boolean[][] lit = new boolean[16][16];
+        List<int[]> emitters = o.natural() ? gatherEmitters(world, cp, lo, hi) : List.of();
 
         int layers = 0;
         long sumX = 0, sumZ = 0, cells = 0;
@@ -1602,6 +1792,7 @@ public class SusChunkFinderTest extends Module {
             for (int x = 0; x < 16; x++) {
                 for (int z = 0; z < 16; z++) {
                     int l = world.getLightLevel(LightType.BLOCK, m.set(startX + x, y, startZ + z));
+                    if (l > 0 && !emitters.isEmpty() && explainedByNature(startX + x, y, startZ + z, l, emitters)) l = 0;
 
                     if (inBox) {
                         boolean on = l >= o.minLight();
@@ -1747,6 +1938,40 @@ public class SusChunkFinderTest extends Module {
             }
         }
         return out;
+    }
+
+    // ---------- target HUD ----------
+
+    @EventHandler
+    private void onHud(Render2DEvent event) {
+        if (!hudOn.get() || mc.player == null || mc.world == null || mc.options.hudHidden) return;
+        Map<ChunkPos, Integer> sus = susChunks;
+        if (sus.isEmpty()) return;
+
+        ChunkPos cp = SusHud.lookedChunk(sus.keySet(), hudDistance.get(), -64, 320);
+        if (cp == null) return;
+
+        List<String> lines = new ArrayList<>();
+        boolean best = bestChunks.contains(cp);
+        lines.add("Sus chunk " + cp.x + ", " + cp.z + (best ? "  [BEST]" : ""));
+        BlockPos t = digTarget(cp);
+        lines.add("Dig spot: X " + t.getX() + "  Z " + t.getZ());
+        double dist = Math.hypot(cp.getStartX() + 8 - mc.player.getX(), cp.getStartZ() + 8 - mc.player.getZ());
+        lines.add("Distance: " + (int) dist + " blocks");
+        lines.add("Heat: " + heatmap.getOrDefault(cp, 0) + "  (needs " + effectiveSensitivity() + ")");
+        lines.add("Score: " + (int) rank(cp, susLevel) + "   zone level: " + susLevel.getOrDefault(cp, 0));
+        int ug = ugScores.getOrDefault(cp, 0), lb = lightScores.getOrDefault(cp, 0), dp = deepScores.getOrDefault(cp, 0);
+        if (ug > 0) lines.add("Underground blocks: " + ug + (blocksHidden && adaptive.get() ? " (ignored: hidden)" : ""));
+        if (lb > 0) lines.add("Lit room (box): " + lb);
+        if (dp > 0) lines.add("Deep light: " + dp + (lavaNear(cp) ? " (lava nearby)" : ""));
+        boolean nat = naturalZone.contains(cp) || natMask.containsKey(cp);
+        lines.add("Natural structure: " + (nat ? "yes (likely natural)" : "no"));
+        if (verifying != null && verifying.equals(cp) && verifyTotal > 0)
+            lines.add("Verifying: " + Math.min(99, (int) (verifyDone.get() * 100L / verifyTotal)) + "%");
+        else if (confirmed.contains(cp)) lines.add("Verified: yes");
+        if (blocksHidden) lines.add("Server hides blocks: " + hiddenKind);
+
+        SusHud.draw(event.drawContext, lines, hudSize.get(), hudOpacity.get(), hudOffX.get(), hudOffY.get());
     }
 
     // ---------- verification ----------
@@ -1898,6 +2123,7 @@ public class SusChunkFinderTest extends Module {
         for (ChunkPos cp : chunks) {
             LitCells cells = litCells.get(cp);
             if (cells == null) continue;
+            if (lightIgnoreNatural.get() && naturalZone.contains(cp)) continue; // natural structure light
 
             for (int i = 0; i < cells.lvl().length; i++) {
                 if (drawn >= cap) return;
