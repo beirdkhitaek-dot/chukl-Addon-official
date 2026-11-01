@@ -116,8 +116,16 @@ public class DeathGhost extends Module {
             ArrayDeque<Frame> q = history.computeIfAbsent(p.getId(), k -> new ArrayDeque<>());
             String pose = p.getPose().name();
             boolean lying = p.isSwimming() || pose.equals("SWIMMING") || pose.equals("GLIDING") || pose.equals("FALL_FLYING");
+            // walk cycle worked out from how far the player moved since the last tick
+            Frame prev = q.peekLast();
+            float limbSpeed = 0, limbPos = 0;
+            if (prev != null) {
+                double moved = Math.hypot(p.getX() - prev.x(), p.getZ() - prev.z());
+                limbSpeed = (float) Math.min(1.0, moved * 4.0);
+                limbPos = prev.limbPos() + limbSpeed;
+            }
             q.addLast(new Frame(p.getX(), p.getY(), p.getZ(), p.getBodyYaw(), p.getHeadYaw(), p.getPitch(),
-                p.limbAnimator.getPos(), p.limbAnimator.getSpeed(), p.getHandSwingProgress(1.0F), p.isSneaking(), lying));
+                limbPos, limbSpeed, p.getHandSwingProgress(1.0F), p.isSneaking(), lying));
             while (q.size() > 45) q.removeFirst();
         }
         history.keySet().removeIf(id -> !present.contains(id) && tick % 40 == 0);
