@@ -4,6 +4,7 @@ import com.chukl.addon.modules.DeepBlockEntityEsp;
 import com.chukl.addon.modules.DugOutHighlighter;
 import com.chukl.addon.modules.LightFinder;
 import com.chukl.addon.modules.GoodRoad;
+import com.chukl.addon.modules.GrenadeCallout;
 import com.chukl.addon.modules.KrispyChunkFinder;
 import com.chukl.addon.modules.ChuklSpawnerNotifier;
 import com.chukl.addon.modules.SusChunkFinder;
@@ -41,6 +42,7 @@ public class ChuklAddon extends MeteorAddon {
     public static final Logger LOG = LogUtils.getLogger();
     public static final Category CATEGORY = new Category("Chukl");
     public static final Category RENDER_CATEGORY = new Category("Chukl Render");
+    public static final Category VISUAL_CATEGORY = new Category("Chukl Visual");
 
     @Override
     public void onInitialize() {
@@ -58,6 +60,9 @@ public class ChuklAddon extends MeteorAddon {
         Modules.get().add(new VulxtsFreeLook());
         Modules.get().add(new KrispyChunkFinder());
         Modules.get().add(new GoodRoad());
+
+        // Chukl Visual category
+        Modules.get().add(new GrenadeCallout());
 
         // Water Client render modules (Chukl Render category)
         Modules.get().add(new AmethystESP());
@@ -85,6 +90,7 @@ public class ChuklAddon extends MeteorAddon {
     public void onRegisterCategories() {
         Modules.registerCategory(CATEGORY);
         Modules.registerCategory(RENDER_CATEGORY);
+        Modules.registerCategory(VISUAL_CATEGORY);
     }
 
     @Override
