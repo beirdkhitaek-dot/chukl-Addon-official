@@ -5,14 +5,13 @@ import meteordevelopment.meteorclient.events.entity.player.AttackEntityEvent;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
-import meteordevelopment.meteorclient.settings.ColorSetting;
+import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.render.color.Color;
-import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.player.PlayerEntity;
 
@@ -27,74 +26,95 @@ import java.util.Random;
 import java.util.Set;
 
 /**
- * Death Ghost: when a player you kill dies, a dark silhouette with a white glowing outline replays the last
- * moves that player made, then collapses and fades away smoothly.
+ * Death Ghost: a killed player becomes a solid black body (blackout), then dissolves Source-engine style:
+ * the body fades out while it drifts up, shedding white spark streaks and flickering white lightning.
+ * Everything is drawn with Render3DEvent lines/quads from our own particle lists (no game particle API).
+ * Animation time is wall-clock based, so it stays smooth at low FPS (no dependency on a tickDelta field).
  */
 public class DeathGhost extends Module {
     private final SettingGroup sg = settings.getDefaultGroup();
-    private final SettingGroup sgLook = settings.createGroup("Look");
 
-    private final Setting<Boolean> anyDeath = sg.add(new BoolSetting.Builder()
-        .name("any-player-death").description("Also show the ghost when a player you did not hit dies.")
-        .defaultValue(false).build());
+    public enum DissolveType { Energy, Heavy_electrical, Light_electrical }
+
+    private final Setting<Boolean> onlyMine = sg.add(new BoolSetting.Builder()
+        .name("only-on-my-kills").description("Only players you killed. Off = every player death.")
+        .defaultValue(true).build());
 
     private final Setting<Integer> window = sg.add(new IntSetting.Builder()
         .name("kill-window-ticks").description("A death counts as your kill if you hit the player within this many ticks.")
         .defaultValue(80).min(5).sliderMax(400).build());
 
     private final Setting<Double> duration = sg.add(new DoubleSetting.Builder()
-        .name("fade-seconds").description("How long the whole animation lasts. It fades away smoothly over this time.")
-        .defaultValue(2.0).min(0.3).sliderMax(6.0).build());
+        .name("duration").description("Seconds for the whole effect (0.3 s blackout, then the dissolve).")
+        .defaultValue(2.0).min(0.6).sliderMax(6.0).build());
 
-    private final Setting<Integer> replayTicks = sg.add(new IntSetting.Builder()
-        .name("replay-ticks").description("How many of the player's last ticks (20 = 1 second) are replayed.")
-        .defaultValue(20).min(1).sliderMax(40).build());
+    private final Setting<Double> riseHeight = sg.add(new DoubleSetting.Builder()
+        .name("rise-height").description("How many blocks the body drifts up while it dissolves.")
+        .defaultValue(0.3).min(0.0).sliderMax(2.0).build());
 
-    private final Setting<Boolean> fallOver = sg.add(new BoolSetting.Builder()
-        .name("collapse").description("After the replay the body falls over before it fades.")
-        .defaultValue(true).build());
+    private final Setting<Integer> particleAmount = sg.add(new IntSetting.Builder()
+        .name("particle-amount").description("White spark streaks spawned per body.")
+        .defaultValue(60).min(0).sliderMax(300).build());
+
+    private final Setting<Boolean> arcs = sg.add(new BoolSetting.Builder()
+        .name("arcs").description("White lightning bolts around the dissolving body.").defaultValue(true).build());
+
+    private final Setting<DissolveType> dissolveType = sg.add(new EnumSetting.Builder<DissolveType>()
+        .name("dissolve-type").description("Energy: sparks and a few bolts. Heavy: more, thicker bolts. Light: fewer, thinner bolts.")
+        .defaultValue(DissolveType.Energy).build());
+
+    private final Setting<Boolean> blueTint = sg.add(new BoolSetting.Builder()
+        .name("dark-blue-tint").description("Body turns dark blue toward the end (CS:GO style).").defaultValue(false).build());
 
     private final Setting<Integer> maxGhosts = sg.add(new IntSetting.Builder()
-        .name("max-ghosts").defaultValue(6).min(1).sliderMax(20).build());
+        .name("max-ghosts").description("Limit for performance (Android).").defaultValue(6).min(1).sliderMax(20).build());
 
-    private final Setting<SettingColor> coreColor = sgLook.add(new ColorSetting.Builder()
-        .name("core-color").description("The dark body.").defaultValue(new SettingColor(8, 8, 12, 255)).build());
-
-    private final Setting<SettingColor> glowColor = sgLook.add(new ColorSetting.Builder()
-        .name("glow-color").description("The glowing outline.").defaultValue(new SettingColor(255, 255, 255, 255)).build());
-
-    private final Setting<Double> glowSize = sgLook.add(new DoubleSetting.Builder()
-        .name("glow-size").defaultValue(0.05).min(0.0).sliderMax(0.2).build());
-
-    private final Setting<Boolean> sparks = sgLook.add(new BoolSetting.Builder()
-        .name("sparks").description("Little embers rising from the body.").defaultValue(true).build());
+    private static final double BLACKOUT_MS = 300.0;
+    private static final int MAX_PARTICLES = 400;
 
     private record Frame(double x, double y, double z, float bodyYaw, float headYaw, float pitch,
                          float limbPos, float limbSpeed, float swing, boolean sneak, boolean lying) {}
 
+    private static final class Spark {
+        double x, y, z, vx, vy, vz, len; double age, life;
+    }
+
+    private static final class Bolt {
+        double[][] pts; double[] flash;
+    }
+
     private static final class Ghost {
-        final List<Frame> frames;
+        final Frame pose;
         final long born = System.currentTimeMillis();
-        final long seed;
-        Ghost(List<Frame> f, long seed) { this.frames = f; this.seed = seed; }
+        final Random rng;
+        final List<Spark> sparks = new ArrayList<>();
+        final List<Bolt> bolts = new ArrayList<>();
+        long lastBolt = 0, lastStep;
+        double emitAcc = 0;
+        Ghost(Frame pose, long seed) { this.pose = pose; this.rng = new Random(seed); this.lastStep = born; }
     }
 
     private final KillTracker tracker = new KillTracker();
-    private final Map<Integer, ArrayDeque<Frame>> history = new HashMap<>();
+    private final Map<Integer, Frame> lastAlive = new HashMap<>();
     private final List<Ghost> ghosts = new ArrayList<>();
     private int tick = 0;
 
     public DeathGhost() {
         super(ChuklAddon.VISUAL_CATEGORY, "death-ghost",
-            "When you kill a player, a dark glowing silhouette replays their last moves and fades away.");
+            "A killed player turns black, then dissolves like the Half-Life 2 energy dissolve, with sparks and lightning.");
     }
 
     @Override
     public void onActivate() {
         tracker.clear();
-        history.clear();
+        lastAlive.clear();
         ghosts.clear();
         tick = 0;
+    }
+
+    @Override
+    public void onDeactivate() {
+        ghosts.clear();
     }
 
     @EventHandler
@@ -107,40 +127,30 @@ public class DeathGhost extends Module {
         if (mc.world == null || mc.player == null) return;
         tick++;
 
-        // keep the last second or two of every nearby player's movement
+        // remember the last living pose of every nearby player (the death pose is the last one before they die)
         Set<Integer> present = new HashSet<>();
         for (PlayerEntity p : mc.world.getPlayers()) {
             if (p == mc.player) continue;
-            if (p.isDead() || p.getHealth() <= 0.0F || p.deathTime > 0) continue; // do not record the death itself
+            if (p.isDead() || p.getHealth() <= 0.0F || p.deathTime > 0) continue;
             present.add(p.getId());
-            ArrayDeque<Frame> q = history.computeIfAbsent(p.getId(), k -> new ArrayDeque<>());
+            Frame prev = lastAlive.get(p.getId());
             String pose = p.getPose().name();
-            boolean lying = p.isSwimming() || pose.equals("SWIMMING") || pose.equals("GLIDING") || pose.equals("FALL_FLYING");
-            // walk cycle worked out from how far the player moved since the last tick
-            Frame prev = q.peekLast();
+            boolean lying = pose.equals("SWIMMING") || pose.equals("GLIDING") || pose.equals("FALL_FLYING");
             float limbSpeed = 0, limbPos = 0;
             if (prev != null) {
                 double moved = Math.hypot(p.getX() - prev.x(), p.getZ() - prev.z());
                 limbSpeed = (float) Math.min(1.0, moved * 4.0);
                 limbPos = prev.limbPos() + limbSpeed;
             }
-            q.addLast(new Frame(p.getX(), p.getY(), p.getZ(), p.getBodyYaw(), p.getHeadYaw(), p.getPitch(),
+            lastAlive.put(p.getId(), new Frame(p.getX(), p.getY(), p.getZ(), p.getBodyYaw(), p.getHeadYaw(), p.getPitch(),
                 limbPos, limbSpeed, p.getHandSwingProgress(1.0F), p.isSneaking(), lying));
-            while (q.size() > 45) q.removeFirst();
         }
-        history.keySet().removeIf(id -> !present.contains(id) && tick % 40 == 0);
+        if (tick % 40 == 0) lastAlive.keySet().removeIf(id -> !present.contains(id) && mc.world.getEntityById(id) == null);
 
-        for (PlayerEntity p : tracker.deaths(mc.world, mc.player, tick, window.get(), anyDeath.get())) {
-            ArrayDeque<Frame> q = history.get(p.getId());
-            List<Frame> frames = new ArrayList<>();
-            if (q != null && !q.isEmpty()) {
-                List<Frame> all = new ArrayList<>(q);
-                int n = Math.min(all.size(), replayTicks.get());
-                frames.addAll(all.subList(all.size() - n, all.size()));
-            } else {
-                frames.add(new Frame(p.getX(), p.getY(), p.getZ(), p.getBodyYaw(), p.getHeadYaw(), p.getPitch(), 0, 0, 0, false, false));
-            }
-            ghosts.add(new Ghost(frames, p.getId() * 31L + tick));
+        for (PlayerEntity p : tracker.deaths(mc.world, mc.player, tick, window.get(), !onlyMine.get())) {
+            Frame f = lastAlive.get(p.getId());
+            if (f == null) f = new Frame(p.getX(), p.getY(), p.getZ(), p.getBodyYaw(), p.getHeadYaw(), p.getPitch(), 0, 0, 0, false, false);
+            ghosts.add(new Ghost(f, p.getId() * 31L + tick));
             while (ghosts.size() > maxGhosts.get()) ghosts.remove(0);
         }
     }
@@ -157,94 +167,176 @@ public class DeathGhost extends Module {
         while (it.hasNext()) {
             Ghost g = it.next();
             double age = now - g.born;
-            if (age >= total) { it.remove(); continue; }
-            double t = age / total;
-            double fade = 1.0 - t * t * (3.0 - 2.0 * t); // smooth fade 1 -> 0
-            drawGhost(event, g, age, fade);
+            boolean alive = age < total;
+            if (!alive && g.sparks.isEmpty()) { it.remove(); continue; }
+            double dissolveMs = Math.max(1.0, total - BLACKOUT_MS);
+            double prog = age <= BLACKOUT_MS ? 0.0 : Math.min(1.0, (age - BLACKOUT_MS) / dissolveMs);
+            double sm = smooth(prog);
+            double rise = riseHeight.get() * sm;
+            double dt = Math.min(0.1, (now - g.lastStep) / 1000.0);
+            g.lastStep = now;
+
+            if (alive) drawBody(event, g, prog, sm, rise);
+            if (alive && age > BLACKOUT_MS) {
+                emitSparks(g, dt, dissolveMs, rise, sm);
+                if (arcs.get()) updateAndDrawBolts(event, g, now, rise, sm);
+            }
+            stepAndDrawSparks(event, g, dt);
         }
     }
 
-    private void drawGhost(Render3DEvent event, Ghost g, double ageMs, double fade) {
-        List<Frame> fr = g.frames;
-        double pos = ageMs / 50.0; // 20 frames per second, same as the game
-        int i0 = (int) Math.min(fr.size() - 1, Math.floor(pos));
-        int i1 = Math.min(fr.size() - 1, i0 + 1);
-        double f = pos >= fr.size() - 1 ? 0 : pos - Math.floor(pos);
-        Frame a = fr.get(i0), b = fr.get(i1);
+    private void drawBody(Render3DEvent event, Ghost g, double prog, double sm, double rise) {
+        Frame f = g.pose;
+        double x = f.x, y = f.y + rise, z = f.z;
+        double rad = -Math.toRadians(f.bodyYaw);
+        double tilt = f.lying ? Math.toRadians(80) : (f.sneak ? Math.toRadians(25) : 0);
+        double alpha = 1.0 - sm; // slow fade 1 -> 0 (stays 1 during the blackout)
+        double shrink = 1.0 - 0.2 * sm;
 
-        double x = lerp(a.x, b.x, f), y = lerp(a.y, b.y, f), z = lerp(a.z, b.z, f);
-        double bodyYaw = lerpAngle(a.bodyYaw, b.bodyYaw, f);
-        double headYaw = lerpAngle(a.headYaw, b.headYaw, f);
-        double pitch = lerp(a.pitch, b.pitch, f);
-        double limbPos = lerp(a.limbPos, b.limbPos, f);
-        double limbSpeed = Math.min(1.0, lerp(a.limbSpeed, b.limbSpeed, f));
-        double swing = lerp(a.swing, b.swing, f);
-        boolean sneak = a.sneak;
-        double tilt = a.lying ? Math.toRadians(80) : (sneak ? Math.toRadians(25) : 0);
+        // very dark, almost no color; optionally drifts to dark blue near the end
+        int r = 5, gr = 5, b = 8;
+        if (blueTint.get()) {
+            double k = clamp((prog - 0.4) / 0.6, 0, 1);
+            r = (int) lerp(5, 8, k); gr = (int) lerp(5, 22, k); b = (int) lerp(8, 70, k);
+        }
+        Color col = new Color(r, gr, b, (int) clamp(255 * alpha, 0, 255));
 
-        // after the replay: slump over, sinking a little
-        double replayMs = fr.size() * 50.0;
-        double fall = 0;
-        if (fallOver.get() && ageMs > replayMs) fall = smooth(Math.min(1.0, (ageMs - replayMs) / 600.0));
-        tilt += -Math.toRadians(88) * fall;
-        y -= 0.25 * fall;
-        limbSpeed *= (1.0 - fall * 0.7);
+        double armSwing = Math.cos(f.limbPos * 0.6662) * 1.0 * f.limbSpeed;
+        double legSwing = Math.cos(f.limbPos * 0.6662) * 1.4 * f.limbSpeed;
+        double hit = -Math.sin(f.swing * Math.PI) * 1.4;
+        double headRot = Math.toRadians(f.pitch);
+        double headTurn = -Math.toRadians(clamp(wrap(f.headYaw - f.bodyYaw), -50, 50));
 
-        double rad = -Math.toRadians(bodyYaw);
-        SettingColor core = coreColor.get();
-        SettingColor glow = glowColor.get();
-        int coreA = (int) Math.max(0, Math.min(255, 235 * fade));
-        int glowA = (int) Math.max(0, Math.min(255, 255 * fade));
-        Color cCore = new Color(core.r, core.g, core.b, coreA);
-        Color cGlow = new Color(glow.r, glow.g, glow.b, (int) (glowA * 0.35));
-        Color cEdge = new Color(glow.r, glow.g, glow.b, glowA);
-
-        double armSwing = Math.cos(limbPos * 0.6662) * 1.0 * limbSpeed;
-        double legSwing = Math.cos(limbPos * 0.6662) * 1.4 * limbSpeed;
-        double hit = -Math.sin(swing * Math.PI) * 1.4;
-        double headRot = Math.toRadians(pitch);
-        double headTurn = -Math.toRadians(clamp(wrap(headYaw - bodyYaw), -50, 50));
-        double sneakLean = sneak ? 0.5 : 0.0;
-
-        double gs = glowSize.get();
-        // part: pivot (px), half-size (px/16 handled below), box center offset from pivot, rotX, rotY
         double[][] parts = {
-            // pivotX, pivotY, pivotZ,  offY,  hx,  hy,  hz,   rotX,                  rotY
-            {0, 18, 0, 0, 4, 6, 2, 0, 0},                                              // torso
-            {0, 24, 0, 4, 4, 4, 4, headRot, headTurn},                                // head
-            {-6, 22, 0, -6, 2, 6, 2, armSwing + hit, 0},                               // arm
-            {6, 22, 0, -6, 2, 6, 2, -armSwing, 0},                                     // arm
-            {-2, 12, 0, -6, 2, 6, 2, -legSwing, 0},                                    // leg
-            {2, 12, 0, -6, 2, 6, 2, legSwing, 0}                                       // leg
+            // pivotX, pivotY, pivotZ, offY, hx, hy, hz, rotX, rotY
+            {0, 18, 0, 0, 4, 6, 2, 0, 0},                       // torso
+            {0, 24, 0, 4, 4, 4, 4, headRot, headTurn},          // head
+            {-6, 22, 0, -6, 2, 6, 2, armSwing + hit, 0},        // arm
+            {6, 22, 0, -6, 2, 6, 2, -armSwing, 0},              // arm
+            {-2, 12, 0, -6, 2, 6, 2, -legSwing, 0},             // leg
+            {2, 12, 0, -6, 2, 6, 2, legSwing, 0}                // leg
         };
-        // torso pivot is its center, the others are joints; convert the torso so its center stays at y = 18
-        for (int pass = 0; pass < 2; pass++) {
-            for (int pi = 0; pi < parts.length; pi++) {
-                double[] p = parts[pi];
-                double grow = pass == 0 ? gs * 16.0 : 0.0; // pass 0 = glow shell, pass 1 = dark core
-                double hx = p[4] + grow, hy = p[5] + grow, hz = p[6] + grow;
-                double[][] c = new double[8][];
-                int k = 0;
-                for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) for (int sz = -1; sz <= 1; sz += 2) {
-                    double lx = sx * hx, ly = p[3] + sy * hy, lz = sz * hz;
-                    c[k++] = place(lx, ly, lz, p, pi == 0, tilt + (pi == 0 ? sneakLean * 0 : 0), rad, x, y, z);
-                }
-                if (pass == 0) fillBox(event, c, cGlow);
-                else { fillBox(event, c, cCore); edges(event, c, cEdge); }
+        for (int pi = 0; pi < parts.length; pi++) {
+            double[] p = parts[pi];
+            double hx = p[4] * shrink, hy = p[5] * shrink, hz = p[6] * shrink;
+            double[][] c = new double[8][];
+            int k = 0;
+            for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) for (int sz = -1; sz <= 1; sz += 2) {
+                c[k++] = place(sx * hx, p[3] + sy * hy, sz * hz, p, pi == 0, tilt, rad, x, y, z);
             }
+            fillBox(event, c, col);
         }
+    }
 
-        if (sparks.get()) {
-            Random r = new Random(g.seed);
-            for (int i = 0; i < 14; i++) {
-                double ox = (r.nextDouble() - 0.5) * 0.9, oz = (r.nextDouble() - 0.5) * 0.9;
-                double speed = 0.5 + r.nextDouble() * 0.8, phase = r.nextDouble();
-                double life = ((ageMs / 1000.0) * speed * 0.6 + phase) % 1.0;
-                double sy = y + 0.2 + life * 1.8;
-                int sa = (int) Math.max(0, Math.min(255, 220 * fade * (1.0 - life)));
-                event.renderer.line(x + ox, sy, z + oz, x + ox, sy + 0.12, z + oz, new Color(255, 245, 210, sa));
-            }
+    /** A random point inside the body (world space), following the rise. */
+    private double[] bodyPoint(Ghost g, double rise, double shrink) {
+        double lx = (g.rng.nextDouble() - 0.5) * 0.5 * shrink;
+        double ly = 0.05 + g.rng.nextDouble() * 1.7 * shrink;
+        double lz = (g.rng.nextDouble() - 0.5) * 0.25 * shrink;
+        double rad = -Math.toRadians(g.pose.bodyYaw);
+        double ex = lx * Math.cos(rad) + lz * Math.sin(rad);
+        double ez = -lx * Math.sin(rad) + lz * Math.cos(rad);
+        return new double[]{g.pose.x + ex, g.pose.y + rise + ly, g.pose.z + ez};
+    }
+
+    private void emitSparks(Ghost g, double dt, double dissolveMs, double rise, double sm) {
+        int amount = particleAmount.get();
+        if (amount <= 0) return;
+        double mult = dissolveType.get() == DissolveType.Energy ? 1.0 : (dissolveType.get() == DissolveType.Heavy_electrical ? 0.7 : 0.5);
+        g.emitAcc += amount * mult * dt / (dissolveMs / 1000.0);
+        while (g.emitAcc >= 1.0) {
+            g.emitAcc -= 1.0;
+            if (g.sparks.size() >= MAX_PARTICLES) break;
+            Spark s = new Spark();
+            double[] pt = bodyPoint(g, rise, 1.0 - 0.2 * sm);
+            s.x = pt[0]; s.y = pt[1]; s.z = pt[2];
+            s.vx = (g.rng.nextDouble() - 0.5) * 0.5;
+            s.vy = 0.6 + g.rng.nextDouble() * 0.9; // mostly upward
+            s.vz = (g.rng.nextDouble() - 0.5) * 0.5;
+            s.len = 0.15 + g.rng.nextDouble() * 0.15;
+            s.life = 0.5 + g.rng.nextDouble() * 0.5;
+            g.sparks.add(s);
         }
+    }
+
+    private void stepAndDrawSparks(Render3DEvent event, Ghost g, double dt) {
+        Iterator<Spark> it = g.sparks.iterator();
+        while (it.hasNext()) {
+            Spark s = it.next();
+            s.age += dt;
+            if (s.age >= s.life) { it.remove(); continue; }
+            s.x += s.vx * dt; s.y += s.vy * dt; s.z += s.vz * dt;
+            double fade = 1.0 - s.age / s.life;
+            double m = Math.sqrt(s.vx * s.vx + s.vy * s.vy + s.vz * s.vz);
+            double dx = s.vx / m * s.len, dy = s.vy / m * s.len, dz = s.vz / m * s.len;
+            // soft glow: slightly longer and offset, low alpha, drawn first (behind the core)
+            event.renderer.line(s.x - dx * 0.2 + 0.012, s.y - dy * 0.2, s.z - dz * 0.2 + 0.012,
+                s.x - dx * 1.4 + 0.012, s.y - dy * 1.4, s.z - dz * 1.4 + 0.012, new Color(255, 255, 255, (int) (60 * fade)));
+            event.renderer.line(s.x, s.y, s.z, s.x - dx, s.y - dy, s.z - dz, new Color(255, 255, 255, (int) (255 * fade)));
+        }
+    }
+
+    private void updateAndDrawBolts(Render3DEvent event, Ghost g, long now, double rise, double sm) {
+        DissolveType t = dissolveType.get();
+        if (now - g.lastBolt >= 80 || g.bolts.isEmpty()) { // re-randomize every ~80 ms so they flicker
+            g.lastBolt = now;
+            g.bolts.clear();
+            int count = t == DissolveType.Heavy_electrical ? 3 + g.rng.nextInt(2) : (t == DissolveType.Energy ? 2 + g.rng.nextInt(2) : 2);
+            for (int i = 0; i < count; i++) g.bolts.add(makeBolt(g, rise, sm));
+        }
+        double w = t == DissolveType.Heavy_electrical ? 0.05 : (t == DissolveType.Energy ? 0.03 : 0.015);
+        double fade = 1.0 - sm * 0.8;
+        for (Bolt b : g.bolts) {
+            double[][] p = b.pts;
+            for (int i = 0; i < p.length - 1; i++) {
+                double[] a = p[i], c = p[i + 1];
+                // wider low-alpha outer line (two offset lines stand in for line width)
+                Color outer = new Color(255, 255, 255, (int) (70 * fade));
+                event.renderer.line(a[0] + w, a[1], a[2], c[0] + w, c[1], c[2], outer);
+                event.renderer.line(a[0] - w, a[1], a[2] - w, c[0] - w, c[1], c[2] - w, outer);
+                event.renderer.line(a[0], a[1], a[2], c[0], c[1], c[2], new Color(255, 255, 255, (int) (255 * fade)));
+                if (t == DissolveType.Heavy_electrical)
+                    event.renderer.line(a[0], a[1] + w * 0.5, a[2] + w * 0.5, c[0], c[1] + w * 0.5, c[2] + w * 0.5, new Color(255, 255, 255, (int) (200 * fade)));
+            }
+            // flash at the end point: bright square with a soft halo (two crossed quads each)
+            double[] e = b.flash;
+            flashSquare(event, e, 0.14, new Color(255, 255, 255, (int) (50 * fade)));
+            flashSquare(event, e, 0.06, new Color(255, 255, 255, (int) (255 * fade)));
+        }
+    }
+
+    private Bolt makeBolt(Ghost g, double rise, double sm) {
+        Bolt b = new Bolt();
+        double[] s = bodyPoint(g, rise, 1.0 - 0.2 * sm);
+        double[] d = randDir(g.rng);
+        double len = 1.0 + g.rng.nextDouble() * 2.0;
+        double[] e = {s[0] + d[0] * len, s[1] + d[1] * len, s[2] + d[2] * len};
+        int segs = 6 + g.rng.nextInt(5);
+        b.pts = new double[segs + 1][];
+        b.pts[0] = s;
+        b.pts[segs] = e;
+        for (int i = 1; i < segs; i++) {
+            double f = i / (double) segs;
+            double[] j = randDir(g.rng);
+            double dot = j[0] * d[0] + j[1] * d[1] + j[2] * d[2];
+            double jx = j[0] - d[0] * dot, jy = j[1] - d[1] * dot, jz = j[2] - d[2] * dot; // sideways only
+            double amp = 0.25 * len / 2.0;
+            b.pts[i] = new double[]{s[0] + (e[0] - s[0]) * f + jx * amp, s[1] + (e[1] - s[1]) * f + jy * amp, s[2] + (e[2] - s[2]) * f + jz * amp};
+        }
+        b.flash = e;
+        return b;
+    }
+
+    private static double[] randDir(Random r) {
+        double x, y, z, l;
+        do { x = r.nextGaussian(); y = r.nextGaussian(); z = r.nextGaussian(); l = Math.sqrt(x * x + y * y + z * z); } while (l < 1e-4);
+        return new double[]{x / l, y / l, z / l};
+    }
+
+    private void flashSquare(Render3DEvent e, double[] c, double h, Color col) {
+        e.renderer.quad(c[0] - h, c[1], c[2] - h, c[0] + h, c[1], c[2] - h, c[0] + h, c[1], c[2] + h, c[0] - h, c[1], c[2] + h, col);
+        e.renderer.quad(c[0] - h, c[1] - h, c[2], c[0] + h, c[1] - h, c[2], c[0] + h, c[1] + h, c[2], c[0] - h, c[1] + h, c[2], col);
+        e.renderer.quad(c[0], c[1] - h, c[2] - h, c[0], c[1] - h, c[2] + h, c[0], c[1] + h, c[2] + h, c[0], c[1] + h, c[2] - h, col);
     }
 
     /** Local part coordinates (pixels) -> world position. */
