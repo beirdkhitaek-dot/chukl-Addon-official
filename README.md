@@ -2,6 +2,9 @@
 
 A Meteor Client addon for Minecraft 1.21.11 (Fabric).
 
+**Author:** Chukl · **License:** GPL-3.0 (see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md))
+This is the official ChuklAddon repository: https://github.com/beirdkhitaek-dot/chukl-addon-official
+
 ## Modules
 - **Deep Block Entity ESP** - highlights block entities below a Y level (default Y15), with per-block colors, tracers and a see-through-walls toggle.
 - **Dug Out Highlighter** - highlights big rectangular dug out areas underground, with a see-through-walls toggle.
