@@ -66,6 +66,16 @@ public class DeathGhost extends Module {
     private final Setting<Boolean> blueTint = sg.add(new BoolSetting.Builder()
         .name("dark-blue-tint").description("Body turns dark blue toward the end (CS:GO style).").defaultValue(false).build());
 
+    private final Setting<Boolean> ragdoll = sg.add(new BoolSetting.Builder()
+        .name("ragdoll")
+        .description("Half-Life 2 style: the dissolving body floats and never holds still. Every 0.1-0.2 s each limb gets a random kick (like the game's electrocute forces), so it jitters and slowly drifts.")
+        .defaultValue(true).build());
+
+    private final Setting<Double> ragdollStrength = sg.add(new DoubleSetting.Builder()
+        .name("ragdoll-strength").description("How hard the limbs shake and the body drifts.")
+        .defaultValue(1.0).min(0.1).max(3.0).sliderMax(2.0)
+        .visible(() -> ragdoll.get()).build());
+
     private final Setting<Integer> maxGhosts = sg.add(new IntSetting.Builder()
         .name("max-ghosts").description("Limit for performance (Android).").defaultValue(6).min(1).sliderMax(20).build());
 
@@ -89,6 +99,12 @@ public class DeathGhost extends Module {
         final Random rng;
         final List<Spark> sparks = new ArrayList<>();
         final List<Bolt> bolts = new ArrayList<>();
+        // ragdoll shake: per part (0 torso, 1 head, 2-3 arms, 4-5 legs) offset/velocity (blocks) and rotation/velocity (rad)
+        final double[][] off = new double[6][3], vel = new double[6][3];
+        final double[][] rot = new double[6][2], rvel = new double[6][2];
+        final double[] bOff = new double[3], bVel = new double[3];
+        double tumble = 0, tumbleVel = 0;
+        long lastKick = 0, nextKick = 0;
         long lastBolt = 0, lastStep;
         double emitAcc = 0;
         Ghost(Frame pose, long seed) { this.pose = pose; this.rng = new Random(seed); this.lastStep = born; }
@@ -176,6 +192,7 @@ public class DeathGhost extends Module {
             double dt = Math.min(0.1, (now - g.lastStep) / 1000.0);
             g.lastStep = now;
 
+            if (alive && ragdoll.get()) stepRagdoll(g, dt, now);
             if (alive) drawBody(event, g, prog, sm, rise);
             if (alive && age > BLACKOUT_MS) {
                 emitSparks(g, dt, dissolveMs, rise, sm);
@@ -189,7 +206,7 @@ public class DeathGhost extends Module {
         Frame f = g.pose;
         double x = f.x, y = f.y + rise, z = f.z;
         double rad = -Math.toRadians(f.bodyYaw);
-        double tilt = f.lying ? Math.toRadians(80) : (f.sneak ? Math.toRadians(25) : 0);
+        double tilt = (f.lying ? Math.toRadians(80) : (f.sneak ? Math.toRadians(25) : 0)) + (ragdoll.get() ? g.tumble : 0.0);
         double alpha = 1.0 - sm; // slow fade 1 -> 0 (stays 1 during the blackout)
         double shrink = 1.0 - 0.2 * sm;
 
@@ -217,12 +234,20 @@ public class DeathGhost extends Module {
             {2, 12, 0, -6, 2, 6, 2, legSwing, 0}                // leg
         };
         for (int pi = 0; pi < parts.length; pi++) {
-            double[] p = parts[pi];
+            double[] p = parts[pi].clone();
+            double wx = x, wy = y, wz = z;
+            if (ragdoll.get()) {
+                p[7] += g.rot[pi][0];
+                p[8] += g.rot[pi][1];
+                wx += g.bOff[0] + g.off[pi][0];
+                wy += g.bOff[1] + g.off[pi][1];
+                wz += g.bOff[2] + g.off[pi][2];
+            }
             double hx = p[4] * shrink, hy = p[5] * shrink, hz = p[6] * shrink;
             double[][] c = new double[8][];
             int k = 0;
             for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) for (int sz = -1; sz <= 1; sz += 2) {
-                c[k++] = place(sx * hx, p[3] + sy * hy, sz * hz, p, pi == 0, tilt, rad, x, y, z);
+                c[k++] = place(sx * hx, p[3] + sy * hy, sz * hz, p, pi == 0, tilt, rad, wx, wy, wz);
             }
             fillBox(event, c, col);
         }
@@ -236,7 +261,48 @@ public class DeathGhost extends Module {
         double rad = -Math.toRadians(g.pose.bodyYaw);
         double ex = lx * Math.cos(rad) + lz * Math.sin(rad);
         double ez = -lx * Math.sin(rad) + lz * Math.cos(rad);
-        return new double[]{g.pose.x + ex, g.pose.y + rise + ly, g.pose.z + ez};
+        return new double[]{g.pose.x + ex + g.bOff[0], g.pose.y + rise + ly + g.bOff[1], g.pose.z + ez + g.bOff[2]};
+    }
+
+    /**
+     * Ragdoll shake. In Half-Life 2 a dissolving ragdoll gets a random force on every physics object about every
+     * 0.1-0.2 s, so it jitters and drifts. Here each body part gets a random kick on the same rhythm; soft springs keep
+     * the limbs near the body, and the whole body drifts and tumbles slowly. There is no gravity: it floats.
+     */
+    private void stepRagdoll(Ghost g, double dt, long now) {
+        double s = ragdollStrength.get();
+        if (g.lastKick == 0) g.lastKick = now;
+        if (now - g.lastKick >= g.nextKick) {
+            g.lastKick = now;
+            g.nextKick = 100 + g.rng.nextInt(100);
+            for (int i = 0; i < 6; i++) {
+                double[] d = randDir(g.rng);
+                for (int k = 0; k < 3; k++) g.vel[i][k] += d[k] * 0.9 * s;
+                g.rvel[i][0] += (g.rng.nextDouble() - 0.5) * 10.0 * s;
+                g.rvel[i][1] += (g.rng.nextDouble() - 0.5) * 6.0 * s;
+            }
+            double[] d = randDir(g.rng);
+            for (int k = 0; k < 3; k++) g.bVel[k] += d[k] * 0.35 * s;
+            g.tumbleVel += (g.rng.nextDouble() - 0.5) * 1.6 * s;
+        }
+        double drag = Math.exp(-3.0 * dt);
+        for (int i = 0; i < 6; i++) {
+            for (int k = 0; k < 3; k++) {
+                g.vel[i][k] = (g.vel[i][k] - g.off[i][k] * 14.0 * dt) * drag;
+                g.off[i][k] = clamp(g.off[i][k] + g.vel[i][k] * dt, -0.4, 0.4);
+            }
+            for (int k = 0; k < 2; k++) {
+                g.rvel[i][k] = (g.rvel[i][k] - g.rot[i][k] * 18.0 * dt) * drag;
+                g.rot[i][k] = clamp(g.rot[i][k] + g.rvel[i][k] * dt, -1.2, 1.2);
+            }
+        }
+        double bdrag = Math.exp(-1.2 * dt);
+        for (int k = 0; k < 3; k++) {
+            g.bVel[k] = (g.bVel[k] - g.bOff[k] * 1.5 * dt) * bdrag;
+            g.bOff[k] = clamp(g.bOff[k] + g.bVel[k] * dt, -0.8, 0.8);
+        }
+        g.tumbleVel = (g.tumbleVel - g.tumble * 2.0 * dt) * Math.exp(-1.5 * dt);
+        g.tumble = clamp(g.tumble + g.tumbleVel * dt, -0.6, 0.6);
     }
 
     private void emitSparks(Ghost g, double dt, double dissolveMs, double rise, double sm) {
