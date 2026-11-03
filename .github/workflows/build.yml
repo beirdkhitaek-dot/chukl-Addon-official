@@ -65,8 +65,24 @@ jobs:
           NAME=$(printf '%s' "$SUBJECT" | sed -E 's/^v?[0-9]+(\.[0-9]+)*[[:space:]]*[-:][[:space:]]*//')
           if [ -z "$NAME" ]; then NAME="Update"; fi
           SHA=$(sha256sum "$JAR" | cut -d' ' -f1)
-          NOTES=$(printf '%s\n\n%s\n\n%s\n%s\n' "v${VERSION} - ${NAME}" "Built by GitHub Actions from commit ${GITHUB_SHA}." "SHA-256 of $(basename "$JAR"):" "\`${SHA}\`")
+          # Release notes: the "## v<version>" section of CHANGELOG.md (what's new + how to use), plus install and checksum info.
+          SECTION=$(awk -v v="## v${VERSION}" '$0==v || index($0, v " ")==1 {f=1; next} /^## / {f=0} f' CHANGELOG.md)
+          {
+            if [ -n "$SECTION" ]; then
+              printf '%s\n' "$SECTION"
+            else
+              printf '**What is new:** %s\n' "$NAME"
+              echo
+              echo "(No changelog entry was written for this version.)"
+            fi
+            echo
+            echo "---"
+            echo "**Install:** download \`chukl-addon-${VERSION}.jar\` below and put it in your \`mods\` folder (Fabric 1.21.11 + Meteor Client). Replace the old ChuklAddon jar when updating. Full history: [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md)."
+            echo
+            echo "Built by GitHub Actions from commit ${GITHUB_SHA}."
+            echo "SHA-256 of \`chukl-addon-${VERSION}.jar\`: \`${SHA}\`"
+          } > release-notes.md
           gh release create "v${VERSION}" "$JAR" \
             --target "$GITHUB_SHA" \
             --title "v${VERSION} - ${NAME}" \
-            --notes "$NOTES"
+            --notes-file release-notes.md

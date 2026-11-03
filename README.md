@@ -42,5 +42,7 @@ Locally: install Gradle 9.2+ and JDK 21, then run `gradle build`. The jar is in 
 
 ## Releasing an update
 1. Bump `mod-version` in `gradle/libs.versions.toml`.
-2. Commit and push.
-3. Actions -> **Release** -> Run workflow, and enter the update name.
+2. Add a `## v<version> - <update name>` section to `CHANGELOG.md` with **What's new** and **How to use**. It becomes the release notes.
+3. Commit and push (commit subject: `<version> - <update name>`); the Build workflow publishes the release.
+
+You can also publish by hand: Actions -> **Release** -> Run workflow, and enter the update name.
