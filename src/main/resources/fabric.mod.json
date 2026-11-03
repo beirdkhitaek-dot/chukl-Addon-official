@@ -3,11 +3,15 @@
   "id": "chukl-addon",
   "version": "${version}",
   "name": "ChuklAddon",
-  "description": "A Meteor Client addon with block entity and dug out area highlighters.",
+  "description": "ChuklAddon: a Meteor Client addon with base-finding ESPs (Sus Chunk Finder, Dug Out Highlighter, Deep Block Entity ESP, Light Finder), render and visual modules, and GoodRoad navigation. Open source (GPL-3.0).",
   "authors": [
     "Chukl"
   ],
-  "contact": {},
+  "contact": {
+    "homepage": "https://github.com/beirdkhitaek-dot/chukl-addon-official",
+    "sources": "https://github.com/beirdkhitaek-dot/chukl-addon-official",
+    "issues": "https://github.com/beirdkhitaek-dot/chukl-addon-official/issues"
+  },
   "environment": "client",
   "entrypoints": {
     "meteor": [
@@ -24,5 +28,7 @@
   },
   "mixins": [
     "chukl-addon.mixins.json"
-  ]
+  ],
+  "license": "GPL-3.0-only",
+  "icon": "assets/chukl-addon/icon.png"
 }

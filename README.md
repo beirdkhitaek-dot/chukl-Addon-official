@@ -5,6 +5,15 @@ A Meteor Client addon for Minecraft 1.21.11 (Fabric).
 **Author:** Chukl · **License:** GPL-3.0 (see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md))
 This is the official ChuklAddon repository: https://github.com/beirdkhitaek-dot/chukl-addon-official
 
+> **Is this download official?** Only jars from this repository's [Releases](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases) page are official. Every release jar is built by GitHub Actions straight from the source in this repo (nothing is uploaded by hand), and its SHA-256 is listed in the release notes. ChuklAddon is an independent addon; it is not an official Meteor Client product.
+
+## Install
+1. Install Fabric Loader for Minecraft **1.21.11** and [Meteor Client](https://meteorclient.com) for 1.21.11.
+2. Download `chukl-addon-<version>.jar` from the latest [release](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases/latest).
+3. Put the jar in your `mods` folder next to Meteor Client and start the game. ChuklAddon's modules show up in the Meteor GUI.
+
+Credits for ported modules are in [CREDITS.md](CREDITS.md). Report problems in [Issues](https://github.com/beirdkhitaek-dot/chukl-addon-official/issues).
+
 ## Modules
 - **Deep Block Entity ESP** - highlights block entities below a Y level (default Y15), with per-block colors, tracers and a see-through-walls toggle.
 - **Dug Out Highlighter** - highlights big rectangular dug out areas underground, with a see-through-walls toggle.

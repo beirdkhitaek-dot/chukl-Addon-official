@@ -64,7 +64,9 @@ jobs:
           SUBJECT=$(printf '%s' "$COMMIT_MSG" | head -n 1)
           NAME=$(printf '%s' "$SUBJECT" | sed -E 's/^v?[0-9]+(\.[0-9]+)*[[:space:]]*[-:][[:space:]]*//')
           if [ -z "$NAME" ]; then NAME="Update"; fi
+          SHA=$(sha256sum "$JAR" | cut -d' ' -f1)
+          NOTES=$(printf '%s\n\n%s\n\n%s\n%s\n' "v${VERSION} - ${NAME}" "Built by GitHub Actions from commit ${GITHUB_SHA}." "SHA-256 of $(basename "$JAR"):" "\`${SHA}\`")
           gh release create "v${VERSION}" "$JAR" \
             --target "$GITHUB_SHA" \
             --title "v${VERSION} - ${NAME}" \
-            --notes "v${VERSION} - ${NAME}"
+            --notes "$NOTES"
