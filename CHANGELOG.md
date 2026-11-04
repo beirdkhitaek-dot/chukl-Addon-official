@@ -3,6 +3,16 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.37.0 - Deep Amethyst And Seed Field
+**What's new**
+- **Chukl Sus Chunk Test** now sees fully grown amethyst clusters deep underground (Y -64 to -29 by default). It draws boxes on them that you can see through walls, and counts them as evidence: each cluster adds 1 point to the chunk's underground score (at most 12 per chunk), which also raises its best-chunk ranking. Only fully grown clusters count, not buds.
+- New `world-seed` setting in the General group: type the server's seed (a number, or any text). It is stored for the future seed solver and does not change detection yet.
+
+**How to use**
+- Open **Chukl Sus Chunk Test**, then the new **Deep Amethyst** group. `deep-amethyst` turns it on or off, `amethyst-min-y` / `amethyst-max-y` set the range, `count-as-evidence` and `amethyst-esp` choose what it does, and `amethyst-max-boxes` keeps it light on phones.
+- Natural amethyst geodes are also full of clusters. Chunks inside a detected geode are still ignored by the natural-structure filter, but if you see boxes in a geode, that is natural.
+- `world-seed` is optional. Leave it blank if you do not know the seed.
+
 ## v1.36.1 - Phone Screen Fit
 **What's new**
 - The **CS16 Knife** settings window was too wide for phone screens because of one very long line of text. The text now wraps, so the whole window fits. The same fix is applied to the sound buttons of **Kill Bell** and **Grenade Callout**.

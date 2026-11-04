@@ -11,6 +11,7 @@ import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
+import meteordevelopment.meteorclient.settings.StringSetting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.render.color.Color;
@@ -57,7 +58,8 @@ import java.util.function.Predicate;
  * interesting are skipped, and the sus list refreshes every other tick.
  */
 public class SusChunkFinderTest extends Module {
-    private record ScanResult(int notGrown, boolean hasGrown, Set<BlockPos> deepslate, int ugScore, int ugX, int ugZ, int natMask) {}
+    private record ScanResult(int notGrown, boolean hasGrown, Set<BlockPos> deepslate, int ugScore, int ugX, int ugZ, int natMask,
+                              List<BlockPos> amethyst) {}
 
     public enum RenderMode { Best_Chunks, All_Chunks }
 
@@ -78,7 +80,8 @@ public class SusChunkFinderTest extends Module {
 
     private record Opts(boolean kelp, boolean caveVines, boolean vines, boolean amethyst, boolean folia,
                         boolean bamboo, boolean cocoa, boolean beeNest, boolean deepslate,
-                        Map<Block, Integer> ug, int ugMin, int ugMax, Map<Block, Integer> nat) {}
+                        Map<Block, Integer> ug, int ugMin, int ugMax, Map<Block, Integer> nat,
+                        boolean deepAm, int amMin, int amMax) {}
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgRender = settings.createGroup("Render");
@@ -86,6 +89,7 @@ public class SusChunkFinderTest extends Module {
     private final SettingGroup sgAdapt = settings.createGroup("Adaptive");
     private final SettingGroup sgLight = settings.createGroup("Light (experimental)");
     private final SettingGroup sgHud = settings.createGroup("Target HUD");
+    private final SettingGroup sgAm = settings.createGroup("Deep Amethyst");
 
     // --- General (same list and order as Krypton) ---
 
@@ -312,6 +316,52 @@ public class SusChunkFinderTest extends Module {
         .visible(rotatedDeepslate::get)
         .build()
     );
+
+    // --- Seed (stored for the future seed solver) ---
+
+    private final Setting<String> worldSeed = sgGeneral.add(new StringSetting.Builder()
+        .name("world-seed")
+        .description("The world seed of the server, if you know it: a number, or any text (turned into a number the way Minecraft does). It is stored for the future seed solver and does not change detection yet.")
+        .defaultValue("")
+        .build()
+    );
+
+    // --- Deep amethyst ---
+
+    private final Setting<Boolean> deepAm = sgAm.add(new BoolSetting.Builder()
+        .name("deep-amethyst")
+        .description("Look for fully grown amethyst clusters in a deep Y range (default Y -64 to -29). Only grown clusters count, not buds. Overworld only.")
+        .defaultValue(true).build());
+
+    private final Setting<Integer> amMinY = sgAm.add(new IntSetting.Builder()
+        .name("amethyst-min-y").description("Lowest Y that is checked.")
+        .defaultValue(-64).range(-64, 320).sliderRange(-64, 64).visible(deepAm::get).build());
+
+    private final Setting<Integer> amMaxY = sgAm.add(new IntSetting.Builder()
+        .name("amethyst-max-y").description("Highest Y that is checked.")
+        .defaultValue(-29).range(-64, 320).sliderRange(-64, 64).visible(deepAm::get).build());
+
+    private final Setting<Boolean> amEvidence = sgAm.add(new BoolSetting.Builder()
+        .name("count-as-evidence")
+        .description("Grown clusters raise the chunk's underground score (1 point each, at most 12 per chunk) and its best-chunk ranking. Chunks inside a natural geode are ignored by the natural-structure filter.")
+        .defaultValue(true).visible(deepAm::get).build());
+
+    private final Setting<Boolean> amEsp = sgAm.add(new BoolSetting.Builder()
+        .name("amethyst-esp")
+        .description("Draw boxes on the grown clusters, visible through walls.")
+        .defaultValue(true).visible(deepAm::get).build());
+
+    private final Setting<SettingColor> amColor = sgAm.add(new ColorSetting.Builder()
+        .name("amethyst-color").description("Color of the amethyst boxes.")
+        .defaultValue(new SettingColor(190, 90, 255, 255)).visible(() -> deepAm.get() && amEsp.get()).build());
+
+    private final Setting<Integer> amAlpha = sgAm.add(new IntSetting.Builder()
+        .name("amethyst-alpha").description("Opacity of the amethyst boxes.")
+        .defaultValue(110).range(10, 255).sliderRange(10, 255).visible(() -> deepAm.get() && amEsp.get()).build());
+
+    private final Setting<Integer> amMaxBoxes = sgAm.add(new IntSetting.Builder()
+        .name("amethyst-max-boxes").description("Most boxes drawn at once, nearest first. Lower = lighter for phones.")
+        .defaultValue(150).range(10, 1000).sliderRange(10, 400).visible(() -> deepAm.get() && amEsp.get()).build());
 
     // --- Test: best-chunk rendering ---
 
@@ -790,6 +840,7 @@ public class SusChunkFinderTest extends Module {
     private final Map<ChunkPos, Integer> lightScores = new ConcurrentHashMap<>();
     private volatile Set<ChunkPos> naturalZone = Set.of();
     private final Map<ChunkPos, Integer> deepScores = new ConcurrentHashMap<>();
+    private final Map<ChunkPos, List<BlockPos>> amethystBlocks = new ConcurrentHashMap<>();
     private final Set<ChunkPos> lavaChunks = ConcurrentHashMap.newKeySet();
     private final Map<ChunkPos, LitCells> litCells = new ConcurrentHashMap<>();
     private int observedRadius = -1;
@@ -930,11 +981,28 @@ public class SusChunkFinderTest extends Module {
     }
 
     /** Changes whenever a setting that affects scanning changes, so every loaded chunk gets scanned again. */
+    /** Minecraft style: a number is the seed, any other text becomes its hash code, blank = unknown. */
+    static Long parseSeed(String text) {
+        if (text == null) return null;
+        String t = text.trim();
+        if (t.isEmpty()) return null;
+        try {
+            return Long.parseLong(t);
+        } catch (NumberFormatException e) {
+            return (long) t.hashCode();
+        }
+    }
+
+    /** The world seed typed in the settings, or null when it is blank. Stored for the future seed solver. */
+    public Long getWorldSeed() {
+        return parseSeed(worldSeed.get());
+    }
+
     private int ugSignature() {
         return java.util.Objects.hash(ugDetect.get(), ugMinY.get(), ugMaxY.get(), ugStorage.get(), ugUtility.get(),
             ugRedstone.get(), ugLighting.get(), ugBuilding.get(), ignoreNatural.get(), lightBox.get(), lightMin.get(),
             boxMinSize.get(), boxShape.get(), boxLayers.get(), lightEsp.get(), espMinLight.get(), deepSignal.get(),
-            deepMinLight.get(), deepMinY.get(), deepMaxY.get());
+            deepMinLight.get(), deepMinY.get(), deepMaxY.get(), deepAm.get(), amMinY.get(), amMaxY.get());
     }
 
     private volatile Map<ChunkPos, Integer> susChunks = Map.of();
@@ -1017,6 +1085,7 @@ public class SusChunkFinderTest extends Module {
         deepScores.clear();
         lavaChunks.clear();
         litCells.clear();
+        amethystBlocks.clear();
         naturalZone = Set.of();
         observedRadius = -1;
         observedChangedAt = System.currentTimeMillis();
@@ -1060,7 +1129,8 @@ public class SusChunkFinderTest extends Module {
         return new Opts(kelp.get(), caveVines.get(), vines.get(), amethyst.get(), amethyst.get() && isDonutFolia(),
             bamboo.get(), cocoa.get(), beeNest.get(), rotatedDeepslate.get(),
             isOverworld(mc.world) ? ugBlocks() : Map.of(), Math.min(ugMinY.get(), ugMaxY.get()), Math.max(ugMinY.get(), ugMaxY.get()),
-            isOverworld(mc.world) && ignoreNatural.get() ? natInfo() : Map.of());
+            isOverworld(mc.world) && ignoreNatural.get() ? natInfo() : Map.of(),
+            isOverworld(mc.world) && deepAm.get(), Math.min(amMinY.get(), amMaxY.get()), Math.max(amMinY.get(), amMaxY.get()));
     }
 
     /** Your setting, but never more than the chunk radius this server really sends (once that radius has settled). */
@@ -1205,6 +1275,7 @@ public class SusChunkFinderTest extends Module {
         deepScores.remove(cp);
         lavaChunks.remove(cp);
         litCells.remove(cp);
+        amethystBlocks.remove(cp);
 
         if (prevGrowth > 0) {
             forEachNeighbor(cp, prevSim, n -> heatmap.compute(n, (k, v) -> {
@@ -1237,6 +1308,7 @@ public class SusChunkFinderTest extends Module {
         }
 
         if (result.natMask() != 0) natMask.put(cp, result.natMask());
+        if (!result.amethyst().isEmpty()) amethystBlocks.put(cp, result.amethyst());
         scannedAt.put(cp, System.currentTimeMillis());
 
         if (result.ugScore() > 0) {
@@ -1289,6 +1361,7 @@ public class SusChunkFinderTest extends Module {
         boolean foundBuds = false;
         boolean foundClusters = false;
         Set<BlockPos> deepslate = new HashSet<>();
+        List<BlockPos> amList = new ArrayList<>();
         int ugScore = 0;
         long ugSumX = 0, ugSumZ = 0;
         BlockPos.Mutable other = new BlockPos.Mutable();
@@ -1314,11 +1387,15 @@ public class SusChunkFinderTest extends Module {
                 && sectionMinY + 15 >= o.ugMin() && sectionMinY <= o.ugMax()
                 && section.hasAny(ugFilter);
 
+            boolean scanAm = o.deepAm()
+                && sectionMinY + 15 >= o.amMin() && sectionMinY <= o.amMax()
+                && section.hasAny(SusChunkFinderTest::isCluster);
+
             boolean scanNat = !nat.isEmpty()
                 && sectionMinY + 15 >= -64 && sectionMinY <= 80
                 && section.hasAny(natFilter);
 
-            if (!scanGrowth && !scanDeepslate && !scanUg && !scanNat) continue;
+            if (!scanGrowth && !scanDeepslate && !scanUg && !scanNat && !scanAm) continue;
 
             for (int x = 0; x < 16; x++) {
                 for (int y = 0; y < 16; y++) {
@@ -1380,6 +1457,10 @@ public class SusChunkFinderTest extends Module {
                             }
                         }
 
+                        if (scanAm && block == Blocks.AMETHYST_CLUSTER && by >= o.amMin() && by <= o.amMax()) {
+                            amList.add(new BlockPos(bx, by, bz));
+                        }
+
                         if (scanNat) {
                             Integer ng = nat.get(block);
                             if (ng != null) natCnt[ng]++;
@@ -1424,7 +1505,7 @@ public class SusChunkFinderTest extends Module {
         for (int g = 0; g < natCnt.length; g++) {
             if (natCnt[g] >= NAT_THRESH[g]) mask |= 1 << g;
         }
-        return new ScanResult(notGrown, grown > 0, deepslate, Math.min(ugScore, 200), ugX, ugZ, mask);
+        return new ScanResult(notGrown, grown > 0, deepslate, Math.min(ugScore, 200), ugX, ugZ, mask, amList);
     }
 
     // ---------- main thread ----------
@@ -1613,7 +1694,12 @@ public class SusChunkFinderTest extends Module {
         int deep = deepScores.getOrDefault(c, 0);
         if (deep > 0 && lavaNear(c)) deep = 0; // lava lights its surroundings by itself
         int blockScore = blocksHidden && adaptive.get() ? 0 : ugScores.getOrDefault(c, 0); // fake/hidden blocks cannot be trusted
-        int score = blockScore + lightScores.getOrDefault(c, 0) + deep;
+        int amScore = 0;
+        if (deepAm.get() && amEvidence.get()) {
+            List<BlockPos> am = amethystBlocks.get(c);
+            if (am != null) amScore = Math.min(12, am.size());
+        }
+        int score = blockScore + lightScores.getOrDefault(c, 0) + deep + amScore;
         if (score <= 0) return 0;
         if (ignoreNatural.get() && naturalZone.contains(c) && score < ugThreshold.get() * 3) return 0;
         return score;
@@ -2168,7 +2254,8 @@ public class SusChunkFinderTest extends Module {
                 }
                 if (mc.world != world || selfRes == null) return;
 
-                int freshUg = selfRes.ugScore() + lightScores.getOrDefault(cp, 0) + deepScores.getOrDefault(cp, 0);
+                int freshUg = selfRes.ugScore() + lightScores.getOrDefault(cp, 0) + deepScores.getOrDefault(cp, 0)
+                    + (deepAm.get() && amEvidence.get() ? Math.min(12, selfRes.amethyst().size()) : 0);
                 boolean natural = ignoreNatural.get() && (selfRes.natMask() != 0 || naturalZone.contains(cp)) && freshUg < ugThr * 3;
                 boolean growthOk = growth >= need;
                 boolean ugOk = ugFlagsChunks.get() && freshUg >= ugThr && !natural;
@@ -2279,6 +2366,30 @@ public class SusChunkFinderTest extends Module {
 
                 int x = cells.xyz()[i * 3], y = cells.xyz()[i * 3 + 1], z = cells.xyz()[i * 3 + 2];
                 event.renderer.box(x, y, z, x + 1, y + 1, z + 1, c, c, ShapeMode.Sides, 0);
+                drawn++;
+            }
+        }
+    }
+
+    /** Boxes on the grown amethyst clusters of the deep range, nearest first, drawn through walls. */
+    private void renderAmethystEsp(Render3DEvent event) {
+        if (amethystBlocks.isEmpty()) return;
+        var manager = mc.world.getChunkManager();
+        ChunkPos here = mc.player.getChunkPos();
+        List<ChunkPos> chunks = new ArrayList<>(amethystBlocks.keySet());
+        chunks.sort(java.util.Comparator.comparingInt((ChunkPos c) ->
+            (c.x - here.x) * (c.x - here.x) + (c.z - here.z) * (c.z - here.z)));
+
+        SettingColor base = amColor.get();
+        Color fill = new Color(base.r, base.g, base.b, Math.max(1, Math.min(255, amAlpha.get())));
+        int cap = amMaxBoxes.get(), drawn = 0;
+        for (ChunkPos cp : chunks) {
+            if (!manager.isChunkLoaded(cp.x, cp.z)) continue;
+            List<BlockPos> list = amethystBlocks.get(cp);
+            if (list == null) continue;
+            for (BlockPos p : list) {
+                if (drawn >= cap) return;
+                event.renderer.box(p.getX(), p.getY(), p.getZ(), p.getX() + 1, p.getY() + 1, p.getZ() + 1, fill, fill, ShapeMode.Both, 0);
                 drawn++;
             }
         }
@@ -2443,6 +2554,7 @@ public class SusChunkFinderTest extends Module {
         boolean best = renderMode.get() == RenderMode.Best_Chunks;
         if (best) renderBest(event);
         if (lightEsp.get()) renderLightEsp(event);
+        if (deepAm.get() && amEsp.get() && isOverworld(mc.world)) renderAmethystEsp(event);
 
         Map<ChunkPos, Integer> chunks = best ? Map.<ChunkPos, Integer>of() : susChunks;
         if (!chunks.isEmpty()) {
