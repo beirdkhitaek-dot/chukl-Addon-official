@@ -3,6 +3,13 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.36.1 - Phone Screen Fit
+**What's new**
+- The **CS16 Knife** settings window was too wide for phone screens because of one very long line of text. The text now wraps, so the whole window fits. The same fix is applied to the sound buttons of **Kill Bell** and **Grenade Callout**.
+
+**How to use**
+- Nothing to do. The full folder path for your knife models is now printed in chat when you press **Refresh** (it is also printed when you turn the module on).
+
 ## v1.36.0 - Steady Chunk Pick And Research Modules
 **What's new**
 - **Chukl Sus Chunk Test** no longer jumps around. The best chunk now stays put: it keeps its pick for at least 15 seconds, and another chunk only takes over when it is clearly stronger (50% higher score) and stays ahead for 3 seconds. The dig spot of the picked chunk also stays fixed.

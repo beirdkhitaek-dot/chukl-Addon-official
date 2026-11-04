@@ -18,7 +18,7 @@ final class SoundWidget {
 
     static WWidget make(GuiTheme theme, Setting<String> file, Supplier<Float> volume, Consumer<String> say) {
         WVerticalList list = theme.verticalList();
-        WLabel label = list.add(theme.label("Sounds: press Refresh after importing a .wav")).expandX().widget();
+        WLabel label = list.add(theme.label("Sounds: press Refresh after importing a .wav", 360)).widget();
         WHorizontalList row = list.add(theme.horizontalList()).expandX().widget();
 
         WButton refresh = row.add(theme.button("Refresh")).widget();

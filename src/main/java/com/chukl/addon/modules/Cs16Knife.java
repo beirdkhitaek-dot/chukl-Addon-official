@@ -461,7 +461,7 @@ public class Cs16Knife extends Module {
     @Override
     public WWidget getWidget(GuiTheme theme) {
         WVerticalList list = theme.verticalList();
-        WLabel label = list.add(theme.label("Import: put .mdl knife models in " + folders().get(0).getPath() + ", then press Refresh.")).expandX().widget();
+        WLabel label = list.add(theme.label("Import: put .mdl knife models in the cs16-knives folder (its full path is printed in chat when you press Refresh), then press Refresh.", 360)).widget();
         WHorizontalList row = list.add(theme.horizontalList()).expandX().widget();
 
         WButton refresh = row.add(theme.button("Refresh")).widget();
@@ -484,7 +484,7 @@ public class Cs16Knife extends Module {
     private void cycle(WLabel label, int dir) {
         List<String> names = listSkins();
         if (names.isEmpty()) {
-            label.set("No .mdl models found in " + folders().get(0).getPath());
+            label.set("No .mdl models found yet. Press Refresh to see the folder path in chat.");
             return;
         }
         String cur = skin.get().trim().toLowerCase(Locale.ROOT);
