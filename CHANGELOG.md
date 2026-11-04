@@ -3,6 +3,18 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.39.0 - Rounded Plates And Smooth Animations
+**What's new**
+- **Rounded corners (both Sus Chunk modules):** chunk plates and the best-chunk column now have rounded corners. New setting `corner-radius` (default 3 blocks, 0 = sharp).
+- **No more stacking:** each chunk draws exactly one plate (a single top face and outline instead of a full box with a bottom face), and when several zones sit in the same chunk only the strongest marker beam is drawn. The overlapping glow that looked messy inside one chunk is gone.
+- **Fade in and fade out:** chunks fade in when they get flagged and fade out when they stop being sus or leave range. The marker beams fade with their chunk.
+- **Sliding marker (Chukl Sus Chunk Test):** when the best chunk changes, the column, energy orb, dig shaft and tracer glide to the new place instead of jumping. A very long jump fades in at the new place instead.
+- New settings in the Render group of both modules: `animations`, `fade-seconds`, `slide-seconds`.
+
+**How to use**
+- Open **Chukl Sus Chunk** or **Chukl Sus Chunk Test**, then the **Render** group. Raise `corner-radius` for rounder plates, or turn `animations` off if you want instant changes.
+- Slower phones: if it feels heavy with many chunks, set `corner-radius` to 0, which draws the simplest shape.
+
 ## v1.38.0 - Target HUD Focus, Instant Goat ESP And Anticheat Notes
 **What's new**
 - **Target HUD (both Sus Chunk modules)** now only shows when you look at what is drawn: the chunk plate in **Chukl Sus Chunk**, and the best chunk's column, energy orb or dig shaft in **Chukl Sus Chunk Test** (the plate in All Chunks mode). It no longer shows when you look at empty air above or below a chunk.

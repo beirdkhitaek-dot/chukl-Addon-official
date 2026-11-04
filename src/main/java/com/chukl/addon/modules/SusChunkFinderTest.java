@@ -241,6 +241,25 @@ public class SusChunkFinderTest extends Module {
         .build()
     );
 
+    private final Setting<Boolean> animations = sgRender.add(new BoolSetting.Builder()
+        .name("animations").description("Chunks fade in and out when they appear or disappear, and the best-chunk marker slides when it changes place.")
+        .defaultValue(true).build());
+
+    private final Setting<Double> fadeSeconds = sgRender.add(new DoubleSetting.Builder()
+        .name("fade-seconds").description("How long a fade in or fade out takes.")
+        .defaultValue(0.4).range(0.05, 3).sliderRange(0.1, 1.5).visible(() -> animations.get()).build());
+
+    private final Setting<Double> slideSeconds = sgRender.add(new DoubleSetting.Builder()
+        .name("slide-seconds").description("How long the marker takes to slide to a new place.")
+        .defaultValue(0.6).range(0.05, 3).sliderRange(0.1, 1.5).visible(() -> animations.get()).build());
+
+    private final Setting<Double> cornerRadius = sgRender.add(new DoubleSetting.Builder()
+        .name("corner-radius").description("Rounds the corners of the chunk plates (blocks). 0 = sharp square corners.")
+        .defaultValue(3.0).range(0, 8).sliderRange(0, 8).build());
+
+    private final SusAnim anim = new SusAnim();
+    private double fadeMul = 1.0;
+
     private final Setting<MarkerStyle> markerStyle = sgRender.add(new EnumSetting.Builder<MarkerStyle>()
         .name("marker-style")
         .description("Look of the pillar. Lightning = crackling electric bolts, Light Beam = glowing beam, Pulse Beam = beam that breathes, Rainbow Beam = color-cycling beam, Solid = filled column, Outline = thin lines.")
@@ -1029,6 +1048,7 @@ public class SusChunkFinderTest extends Module {
 
     @Override
     public void onDeactivate() {
+        anim.clear();
         stopExecutors();
         lastWorld = null;
         clearData();
@@ -2467,7 +2487,10 @@ public class SusChunkFinderTest extends Module {
 
     private void renderBest(Render3DEvent event) {
         List<ChunkPos> best = bestChunks;
-        if (best.isEmpty()) return;
+        List<SusAnim.Slot> slots = anim.slots(best, animations.get(), fadeSeconds.get(), slideSeconds.get());
+        boolean any = false;
+        for (SusAnim.Slot sl : slots) if (sl.fade > 0.003f) { any = true; break; }
+        if (!any) return;
 
         ChunkStyle style = chunkStyle.get();
         boolean orb = style != ChunkStyle.Column;
@@ -2484,28 +2507,29 @@ public class SusChunkFinderTest extends Module {
         double shaftTop = Math.max(y0, yMax) + 1;
 
         List<double[]> beams = new ArrayList<>();
-        for (int i = 0; i < best.size(); i++) {
-            ChunkPos cp = best.get(i);
-            double ox = cp.getStartX() + 8.0, oz = cp.getStartZ() + 8.0;
+        for (int i = 0; i < slots.size(); i++) {
+            SusAnim.Slot sl = slots.get(i);
+            if (sl.fade <= 0.003f) continue;
+            double ox = sl.x, oz = sl.z;
+            double f = sl.fade;
+            fadeMul = f;
 
             if (column) {
-                // the chunk, from the bottom of the dig range up to the top of it
+                // the chunk, from the bottom of the dig range up to the top of it (one rounded column per chunk)
                 Color side = new Color(fill.r, fill.g, fill.b, alpha.get());
-                event.renderer.box(
-                    cp.getStartX() + inset, yMin, cp.getStartZ() + inset,
-                    cp.getStartX() + 16 - inset, yMax + 1, cp.getStartZ() + 16 - inset,
-                    side, line, mode, 0
-                );
+                SusAnim.plate(event, ox - 8 + inset, oz - 8 + inset, ox + 8 - inset, oz + 8 - inset,
+                    yMin, yMax + 1 - yMin, cornerRadius.get(), side, line, mode, f);
             }
 
-            if (orb) renderOrb(event, ox, y0, oz, orbSize.get(), cp.x * 31 + cp.z);
+            if (orb) renderOrb(event, ox, y0, oz, orbSize.get(), (int) (sl.tx * 31 + sl.tz));
 
-            if (showShaft.get()) {
-                // the dig shaft: one block wide, from the surface down to the bottom
-                BlockPos t = digTarget(cp);
-                Color shaft = new Color(mark.r, mark.g, mark.b, 150);
-                Color shaftLine = new Color(255, 255, 255, 220);
-                event.renderer.box(t.getX(), yMin, t.getZ(), t.getX() + 1, shaftTop, t.getZ() + 1, shaft, shaftLine, ShapeMode.Both, 0);
+            if (showShaft.get() && i < best.size()) {
+                // the dig shaft: one block wide, from the surface down to the bottom (slides with the marker)
+                BlockPos t = digTarget(best.get(i));
+                double sx = ox - (best.get(i).getStartX() + 8.0), sz = oz - (best.get(i).getStartZ() + 8.0);
+                Color shaft = new Color(mark.r, mark.g, mark.b, (int) (150 * f));
+                Color shaftLine = new Color(255, 255, 255, (int) (220 * f));
+                event.renderer.box(t.getX() + sx, yMin, t.getZ() + sz, t.getX() + 1 + sx, shaftTop, t.getZ() + 1 + sz, shaft, shaftLine, ShapeMode.Both, 0);
             }
 
             if (tracers.get()) {
@@ -2513,12 +2537,13 @@ public class SusChunkFinderTest extends Module {
                 event.renderer.line(
                     RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z,
                     ox, y0, oz,
-                    new Color(tc.r, tc.g, tc.b, tc.a)
+                    new Color(tc.r, tc.g, tc.b, (int) (tc.a * f))
                 );
             }
 
-            beams.add(new double[]{ox, oz, i == 0 ? 2 : 1});
+            beams.add(new double[]{ox, oz, i == 0 ? 2 : 1, f});
         }
+        fadeMul = 1.0;
 
         if (zoneMarker.get()) renderMarkers(event, beams);
     }
@@ -2552,14 +2577,14 @@ public class SusChunkFinderTest extends Module {
         // soft glow: fainter, slightly bigger rings around the orb
         for (int g = 1; g <= markerGlow.get(); g++) {
             double rr = r * (1.0 + 0.18 * g);
-            Color halo = new Color(cr, cg, cb, (int) (Math.max(10, 110 / (g + 0.5)) * pulse));
+            Color halo = new Color(cr, cg, cb, (int) (Math.max(10, 110 / (g + 0.5)) * pulse * fadeMul));
             ring(event, cx, cy, cz, rr, 1, 0, 0, 0, 0, 1, halo);
             ring(event, cx, cy, cz, rr, cs, 0, sn, 0, 1, 0, halo);
             ring(event, cx, cy, cz, rr, -sn, 0, cs, 0, 1, 0, halo);
         }
 
         // the sphere: equator, two spinning meridians and two latitude rings
-        Color shell = new Color(Math.min(255, cr + 90), Math.min(255, cg + 90), Math.min(255, cb + 90), (int) (235 * pulse));
+        Color shell = new Color(Math.min(255, cr + 90), Math.min(255, cg + 90), Math.min(255, cb + 90), (int) (235 * pulse * fadeMul));
         ring(event, cx, cy, cz, r, 1, 0, 0, 0, 0, 1, shell);
         ring(event, cx, cy, cz, r, cs, 0, sn, 0, 1, 0, shell);
         ring(event, cx, cy, cz, r, -sn, 0, cs, 0, 1, 0, shell);
@@ -2570,12 +2595,12 @@ public class SusChunkFinderTest extends Module {
         // white-hot core
         double core = r * 0.2 * (0.9 + 0.2 * pulse);
         event.renderer.box(cx - core, cy - core, cz - core, cx + core, cy + core, cz + core,
-            new Color(255, 255, 255, 240), new Color(190, 225, 255, 255), ShapeMode.Both, 0);
+            new Color(255, 255, 255, (int) (240 * fadeMul)), new Color(190, 225, 255, (int) (255 * fadeMul)), ShapeMode.Both, 0);
 
         // electric arcs: jagged lines that jump to a new random shape ~11 times a second
         int arcs = orbArcs.get();
         long slice = System.currentTimeMillis() / 90;
-        Color bolt = new Color(225, 242, 255, 235);
+        Color bolt = new Color(225, 242, 255, (int) (235 * fadeMul));
         for (int a = 0; a < arcs; a++) {
             java.util.Random rnd = new java.util.Random(slice * 7919L + a * 104729L + seed);
             double theta = rnd.nextDouble() * Math.PI * 2;
@@ -2620,6 +2645,7 @@ public class SusChunkFinderTest extends Module {
     @EventHandler
     private void onRender(Render3DEvent event) {
         if (mc.world == null || mc.player == null) return;
+        anim.tick();
 
         boolean best = renderMode.get() == RenderMode.Best_Chunks;
         if (best) renderBest(event);
@@ -2627,7 +2653,7 @@ public class SusChunkFinderTest extends Module {
         if (deepAm.get() && amEsp.get() && isOverworld(mc.world)) renderAmethystEsp(event);
 
         Map<ChunkPos, Integer> chunks = best ? Map.<ChunkPos, Integer>of() : susChunks;
-        if (!chunks.isEmpty()) {
+        if (!chunks.isEmpty() || anim.hasPlates()) {
             double y = baseY();
             double thickness = chunkThickness.get();
             int inset = chunkInset.get();
@@ -2641,6 +2667,7 @@ public class SusChunkFinderTest extends Module {
             int sens = Math.max(1, effectiveSensitivity());
             Map<ChunkPos, Integer> levels = susLevel;
 
+            Map<ChunkPos, Integer> targets = new java.util.HashMap<>();
             for (Map.Entry<ChunkPos, Integer> entry : chunks.entrySet()) {
                 ChunkPos cp = entry.getKey();
 
@@ -2655,14 +2682,16 @@ public class SusChunkFinderTest extends Module {
                     strength *= 0.6 + 0.2 * lvl;
                     a = Math.max(10, (int) (baseAlpha * strength));
                 }
-
-                Color side = new Color(fill.r, fill.g, fill.b, a);
-
-                event.renderer.box(
-                    cp.getStartX() + inset, y, cp.getStartZ() + inset,
-                    cp.getStartX() + 16 - inset, y + thickness, cp.getStartZ() + 16 - inset,
-                    side, line, mode, 0
-                );
+                targets.put(cp, a);
+            }
+            // one rounded plate per chunk (never two on top of each other), fading in and out
+            for (SusAnim.Plate pl : anim.plates(targets, animations.get(), fadeSeconds.get())) {
+                ChunkPos cp = pl.pos;
+                Color side = new Color(fill.r, fill.g, fill.b, pl.alpha);
+                SusAnim.plate(event,
+                    cp.getStartX() + inset, cp.getStartZ() + inset,
+                    cp.getStartX() + 16 - inset, cp.getStartZ() + 16 - inset,
+                    y, thickness, cornerRadius.get(), side, line, mode, pl.fade);
             }
         }
 
@@ -2670,11 +2699,16 @@ public class SusChunkFinderTest extends Module {
             int zview = mc.options.getViewDistance().getValue();
             ChunkPos zhere = mc.player.getChunkPos();
             List<double[]> pts = new ArrayList<>();
+            Map<ChunkPos, double[]> perChunk = new java.util.HashMap<>();
             for (Zone z : zones) {
-                if (Math.max(Math.abs((int) Math.floor(z.centerX() / 16) - zhere.x),
-                    Math.abs((int) Math.floor(z.centerZ() / 16) - zhere.z)) > zview) continue;
-                pts.add(new double[]{z.centerX(), z.centerZ(), z.level()});
+                ChunkPos zc = new ChunkPos((int) Math.floor(z.centerX() / 16), (int) Math.floor(z.centerZ() / 16));
+                if (Math.max(Math.abs(zc.x - zhere.x), Math.abs(zc.z - zhere.z)) > zview) continue;
+                // only the strongest marker per chunk, so beams never stack on each other
+                double[] have = perChunk.get(zc);
+                if (have == null || have[2] < z.level())
+                    perChunk.put(zc, new double[]{z.centerX(), z.centerZ(), z.level(), anim.fadeOf(zc)});
             }
+            pts.addAll(perChunk.values());
             renderMarkers(event, pts);
         }
 
@@ -2726,16 +2760,18 @@ public class SusChunkFinderTest extends Module {
         }
 
         // Pulse breathes between 55% and 100% brightness
-        double pulse = (style == MarkerStyle.Pulse_Beam) ? 0.775 + 0.225 * Math.sin(t * 3.0) : 1.0;
+        double pulse0 = (style == MarkerStyle.Pulse_Beam) ? 0.775 + 0.225 * Math.sin(t * 3.0) : 1.0;
 
         for (double[] pt : pts) {
             int lvl = (int) pt[2];
+            double fm = pt.length > 3 ? pt[3] : 1.0;
+            double pulse = pulse0 * fm;
             double top = bottom + markerHeight.get() + lvl * 16;
             double half = baseHalf + lvl * 0.25; // stronger zones get a fatter pillar
             double cx = pt[0], cz = pt[1];
 
             if (style == MarkerStyle.Outline) {
-                Color line = new Color(r, g, b, Math.max(120, alpha.get()));
+                Color line = new Color(r, g, b, (int) (Math.max(120, alpha.get()) * fm));
                 event.renderer.box(cx - half, bottom, cz - half, cx + half, top, cz + half, line, line, ShapeMode.Lines, 0);
                 continue;
             }
@@ -2747,7 +2783,7 @@ public class SusChunkFinderTest extends Module {
                 event.renderer.box(cx - lh, bottom, cz - lh, cx + lh, top, cz + lh, lcore, lcore, ShapeMode.Sides, 0);
 
                 long slice = System.currentTimeMillis() / 80;
-                Color boltC = new Color(Math.min(255, r + 110), Math.min(255, g + 110), Math.min(255, b + 110), 235);
+                Color boltC = new Color(Math.min(255, r + 110), Math.min(255, g + 110), Math.min(255, b + 110), (int) (235 * fm));
                 int segs = Math.max(8, (int) ((top - bottom) / 3));
                 double spread = half + 0.6;
                 for (int k = 0; k < 3; k++) {

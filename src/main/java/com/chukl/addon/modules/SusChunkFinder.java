@@ -240,6 +240,25 @@ public class SusChunkFinder extends Module {
         .build()
     );
 
+    private final Setting<Boolean> animations = sgRender.add(new BoolSetting.Builder()
+        .name("animations").description("Chunks fade in and out when they appear or disappear, and the best-chunk marker slides when it changes place.")
+        .defaultValue(true).build());
+
+    private final Setting<Double> fadeSeconds = sgRender.add(new DoubleSetting.Builder()
+        .name("fade-seconds").description("How long a fade in or fade out takes.")
+        .defaultValue(0.4).range(0.05, 3).sliderRange(0.1, 1.5).visible(() -> animations.get()).build());
+
+    private final Setting<Double> slideSeconds = sgRender.add(new DoubleSetting.Builder()
+        .name("slide-seconds").description("How long the marker takes to slide to a new place.")
+        .defaultValue(0.6).range(0.05, 3).sliderRange(0.1, 1.5).visible(() -> animations.get()).build());
+
+    private final Setting<Double> cornerRadius = sgRender.add(new DoubleSetting.Builder()
+        .name("corner-radius").description("Rounds the corners of the chunk plates (blocks). 0 = sharp square corners.")
+        .defaultValue(3.0).range(0, 8).sliderRange(0, 8).build());
+
+    private final SusAnim anim = new SusAnim();
+    private double fadeMul = 1.0;
+
     private final Setting<MarkerStyle> markerStyle = sgRender.add(new EnumSetting.Builder<MarkerStyle>()
         .name("marker-style")
         .description("Look of the zone pillar. Outline = old thin lines, Solid = filled column, Light Beam = glowing beam of light, Pulse Beam = beam that breathes, Rainbow Beam = color-cycling beam.")
@@ -400,6 +419,7 @@ public class SusChunkFinder extends Module {
 
     @Override
     public void onDeactivate() {
+        anim.clear();
         stopExecutors();
         lastWorld = null;
         clearData();
@@ -914,11 +934,12 @@ public class SusChunkFinder extends Module {
     @EventHandler
     private void onRender(Render3DEvent event) {
         if (mc.world == null || mc.player == null) return;
+        anim.tick();
 
         if (deepAm.get() && mc.world.getRegistryKey() == net.minecraft.world.World.OVERWORLD) renderAmethystEsp(event);
 
         Map<ChunkPos, Integer> chunks = susChunks;
-        if (!chunks.isEmpty()) {
+        if (!chunks.isEmpty() || anim.hasPlates()) {
             double y = chunkY.get();
             double thickness = chunkThickness.get();
             int inset = chunkInset.get();
@@ -932,6 +953,7 @@ public class SusChunkFinder extends Module {
             int sens = Math.max(1, sensitivity.get());
             Map<ChunkPos, Integer> levels = susLevel;
 
+            Map<ChunkPos, Integer> targets = new java.util.HashMap<>();
             for (Map.Entry<ChunkPos, Integer> entry : chunks.entrySet()) {
                 ChunkPos cp = entry.getKey();
 
@@ -946,14 +968,16 @@ public class SusChunkFinder extends Module {
                     strength *= 0.6 + 0.2 * lvl;
                     a = Math.max(10, (int) (baseAlpha * strength));
                 }
-
-                Color side = new Color(fill.r, fill.g, fill.b, a);
-
-                event.renderer.box(
-                    cp.getStartX() + inset, y, cp.getStartZ() + inset,
-                    cp.getStartX() + 16 - inset, y + thickness, cp.getStartZ() + 16 - inset,
-                    side, line, mode, 0
-                );
+                targets.put(cp, a);
+            }
+            // one rounded plate per chunk (never two on top of each other), fading in and out
+            for (SusAnim.Plate pl : anim.plates(targets, animations.get(), fadeSeconds.get())) {
+                ChunkPos cp = pl.pos;
+                Color side = new Color(fill.r, fill.g, fill.b, pl.alpha);
+                SusAnim.plate(event,
+                    cp.getStartX() + inset, cp.getStartZ() + inset,
+                    cp.getStartX() + 16 - inset, cp.getStartZ() + 16 - inset,
+                    y, thickness, cornerRadius.get(), side, line, mode, pl.fade);
             }
         }
 
@@ -1052,18 +1076,28 @@ public class SusChunkFinder extends Module {
         }
 
         // Pulse breathes between 55% and 100% brightness
-        double pulse = (style == MarkerStyle.Pulse_Beam) ? 0.775 + 0.225 * Math.sin(t * 3.0) : 1.0;
+        double pulse0 = (style == MarkerStyle.Pulse_Beam) ? 0.775 + 0.225 * Math.sin(t * 3.0) : 1.0;
 
+        // only the strongest marker per chunk, so beams never stack on each other
+        Map<ChunkPos, Zone> strongest = new java.util.HashMap<>();
         for (Zone z : zones) {
-            if (Math.max(Math.abs((int) Math.floor(z.centerX() / 16) - here.x),
-                Math.abs((int) Math.floor(z.centerZ() / 16) - here.z)) > view) continue;
+            ChunkPos zc = new ChunkPos((int) Math.floor(z.centerX() / 16), (int) Math.floor(z.centerZ() / 16));
+            if (Math.max(Math.abs(zc.x - here.x), Math.abs(zc.z - here.z)) > view) continue;
+            Zone have = strongest.get(zc);
+            if (have == null || have.level() < z.level()) strongest.put(zc, z);
+        }
+
+        for (Map.Entry<ChunkPos, Zone> ze : strongest.entrySet()) {
+            Zone z = ze.getValue();
+            double fm = anim.fadeOf(ze.getKey());
+            double pulse = pulse0 * fm;
 
             double top = bottom + markerHeight.get() + z.level() * 16;
             double half = baseHalf + z.level() * 0.25; // stronger zones get a fatter pillar
             double cx = z.centerX(), cz = z.centerZ();
 
             if (style == MarkerStyle.Outline) {
-                Color line = new Color(r, g, b, Math.max(120, alpha.get()));
+                Color line = new Color(r, g, b, (int) (Math.max(120, alpha.get()) * fm));
                 event.renderer.box(cx - half, bottom, cz - half, cx + half, top, cz + half, line, line, ShapeMode.Lines, 0);
                 continue;
             }
