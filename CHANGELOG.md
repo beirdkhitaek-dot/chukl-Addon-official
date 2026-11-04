@@ -3,6 +3,19 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.38.0 - Target HUD Focus, Instant Goat ESP And Anticheat Notes
+**What's new**
+- **Target HUD (both Sus Chunk modules)** now only shows when you look at what is drawn: the chunk plate in **Chukl Sus Chunk**, and the best chunk's column, energy orb or dig shaft in **Chukl Sus Chunk Test** (the plate in All Chunks mode). It no longer shows when you look at empty air above or below a chunk.
+- **Goat Block ESP** scans instantly: every chunk in range is scanned the moment you turn it on, change the blocks or Y range, or move into new chunks (nearest first, with a time budget so phones stay smooth). New settings: `instant-scan` (on by default) and `scan-budget-ms`.
+- **Deep amethyst (both Sus Chunk modules)** now tells you in chat how many grown clusters it found in the Y range (for example "Deep amethyst: 12 grown clusters in 3 chunks"). If it finds none among 100+ loaded chunks it says so and explains that the server may not send blocks that deep until you are close. Boxes are drawn through walls, so you do not need to go down.
+- **Server Data Collector** has a new `anticheat-indicators` option. It is passive: it counts how often the server moved you back (position corrections), notes which anticheat names appear in server messages (names only, never the text), and records the reason when the server kicks you. It sends nothing and probes nothing.
+
+**How to use**
+- Target HUD: turn it on in the module's Target HUD group as before, then look at the plate or the marker.
+- Goat Block ESP: nothing to do. Lower `scan-budget-ms` if the game stutters right after you move far.
+- Deep amethyst: watch the chat for the status line. If it says none were found, the server is probably hiding deep blocks from you.
+- Anticheat indicators: turn on `server-data-collector`; the data goes into `meteor-client/chukl-research/server-data-<server>.jsonl`.
+
 ## v1.37.1 - Deep Amethyst For The Original Sus Chunk Finder
 **What's new**
 - The original **Chukl Sus Chunk** (`chukl-sus-chunk`) now has the same **Deep Amethyst** settings as the test version: boxes on fully grown amethyst clusters between Y -64 and -29, visible through walls. Only grown clusters, not buds.

@@ -373,6 +373,8 @@ public class SusChunkFinder extends Module {
 
     private final Map<ChunkPos, List<BlockPos>> amethystBlocks = new java.util.concurrent.ConcurrentHashMap<>();
     private int lastAmSig;
+    private int lastAmCount = -1;
+    private boolean amHinted = false;
 
     /** The world seed typed in the settings, or null when it is blank. Stored for the future seed solver. */
     public Long getWorldSeed() {
@@ -433,6 +435,8 @@ public class SusChunkFinder extends Module {
 
     private void clearData() {
         amethystBlocks.clear();
+        lastAmCount = -1;
+        amHinted = false;
         heatmap.clear();
         tracked.clear();
         growthCounts.clear();
@@ -745,6 +749,8 @@ public class SusChunkFinder extends Module {
 
         scanNewChunks();
 
+        if (mc.player.age % 100 == 50) amethystStatus();
+
         if (debugInfo.get() && mc.player.age % 40 == 0) printDebug();
 
         if (--timer > 0) return;
@@ -881,7 +887,9 @@ public class SusChunkFinder extends Module {
         Map<ChunkPos, Integer> sus = susChunks;
         if (sus.isEmpty()) return;
 
-        ChunkPos cp = SusHud.lookedChunk(sus.keySet(), hudDistance.get(), -64, 320);
+        // only when you look at the chunk plate itself (not at the empty air above or below it)
+        double plateY = chunkY.get();
+        ChunkPos cp = SusHud.lookedChunk(sus.keySet(), hudDistance.get(), plateY, plateY + Math.max(0.1, chunkThickness.get()));
         if (cp == null) return;
 
         int need = Math.max(1, effectiveSensitivity());
@@ -971,6 +979,23 @@ public class SusChunkFinder extends Module {
 
                 if (++drawn >= 500) break; // keeps weak devices smooth
             }
+        }
+    }
+
+    /** Tells you in chat how many deep amethyst clusters were found, so you can tell "none here" from "the server hides them". */
+    private void amethystStatus() {
+        if (!deepAm.get() || mc.world == null || mc.world.getRegistryKey() != net.minecraft.world.World.OVERWORLD) return;
+        int n = 0;
+        for (List<BlockPos> l : amethystBlocks.values()) n += l.size();
+        int lo = Math.min(amMinY.get(), amMaxY.get()), hi = Math.max(amMinY.get(), amMaxY.get());
+        if (n != lastAmCount) {
+            lastAmCount = n;
+            if (n > 0) info("Deep amethyst: " + n + " grown clusters in " + amethystBlocks.size() + " chunks (Y " + lo + " to " + hi + ").");
+        }
+        if (n == 0 && !amHinted && loadedChunks.size() >= 100) {
+            amHinted = true;
+            info("Deep amethyst: none found in Y " + lo + " to " + hi + " among " + loadedChunks.size()
+                + " loaded chunks. If you expect some, this server may not send blocks that deep until you are close.");
         }
     }
 

@@ -32,6 +32,16 @@ final class SusHud {
         return best;
     }
 
+    /** Distance from your crosshair to the box if you are looking at it (within maxDist), else -1. */
+    static double hitDist(double x0, double y0, double z0, double x1, double y1, double z1, double maxDist) {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        if (mc.player == null) return -1;
+        Vec3d o = mc.player.getCameraPosVec(1.0F);
+        Vec3d d = mc.player.getRotationVec(1.0F);
+        double t = rayBox(o, d, x0, y0, z0, x1, y1, z1);
+        return (t >= 0 && t <= maxDist) ? t : -1;
+    }
+
     /** Distance along the ray to the box, or -1 when it misses (0 when the ray starts inside). */
     private static double rayBox(Vec3d o, Vec3d d, double x0, double y0, double z0, double x1, double y1, double z1) {
         double tMin = 0, tMax = Double.MAX_VALUE;

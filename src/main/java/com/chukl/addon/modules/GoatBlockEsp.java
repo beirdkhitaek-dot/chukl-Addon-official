@@ -64,6 +64,16 @@ public class GoatBlockEsp extends Module {
         .name("max-blocks").description("Most blocks drawn at once (nearest first). Lower is lighter for phones.")
         .defaultValue(1500).sliderMax(10000).build());
 
+    private final Setting<Boolean> instantScan = sgGeneral.add(new BoolSetting.Builder()
+        .name("instant-scan")
+        .description("Scan every chunk in range the moment you turn the module on, change the blocks or Y range, or a chunk loads. Off = the old slow scan (3 chunks every 3 ticks).")
+        .defaultValue(true).build());
+
+    private final Setting<Integer> scanBudget = sgGeneral.add(new IntSetting.Builder()
+        .name("scan-budget-ms")
+        .description("Most milliseconds spent scanning per tick once the first full scan is done. A full scan right after a change always uses up to 40 ms per tick until it is finished. Lower = lighter for phones.")
+        .defaultValue(6).range(1, 25).sliderRange(1, 25).visible(instantScan::get).build());
+
     // Boxes
     private final Setting<ColorMode> boxColorMode = sgBoxes.add(new EnumSetting.Builder<ColorMode>()
         .name("box-color-mode").description("Block_Color = each block uses its own color. Custom = the color below.")
@@ -108,6 +118,7 @@ public class GoatBlockEsp extends Module {
     private volatile List<Item> items = List.of();
     private int tick = 0;
     private int lastSig = 0;
+    private boolean burst = true; // a full scan is still going on
 
     public GoatBlockEsp() {
         super(ChuklAddon.RENDER_CATEGORY, "goat-block-esp",
@@ -126,6 +137,7 @@ public class GoatBlockEsp extends Module {
         items = List.of();
         tick = 0;
         lastSig = 0;
+        burst = true;
     }
 
     private int signature() {
@@ -142,39 +154,56 @@ public class GoatBlockEsp extends Module {
             lastSig = sig;
             cache.clear();
             scannedAt.clear();
+            burst = true;
         }
         if (blocks.get().isEmpty()) { items = List.of(); return; }
 
-        if (tick % 3 == 0) scanSome();
-        if (tick % 4 == 0) rebuild();
+        if (instantScan.get()) {
+            long budget = (burst ? 40L : scanBudget.get()) * 1_000_000L;
+            boolean changed = scanSome(budget, Integer.MAX_VALUE);
+            if (changed || tick % 4 == 0) rebuild();
+        } else {
+            if (tick % 3 == 0) scanSome(Long.MAX_VALUE, 3);
+            if (tick % 4 == 0) rebuild();
+        }
     }
 
-    private void scanSome() {
+    /**
+     * Scans chunks that are new or stale, nearest first, until the time or chunk budget runs out.
+     * Returns true when at least one chunk was scanned. While chunks are still waiting, "burst" stays on.
+     */
+    private boolean scanSome(long budgetNanos, int maxChunks) {
         int vd = Math.max(1, Math.max(16, range.get()) / 16);
         ChunkPos c = mc.player.getChunkPos();
         long now = System.currentTimeMillis();
         long stale = 8000L; // chunks are scanned again every 8 seconds to catch mined or placed blocks
         Set<Block> targets = new HashSet<>(blocks.get());
-        int budget = 3;
+        long start = System.nanoTime();
+        int scanned = 0;
+        boolean pending = false;
 
         // nearest chunks first: walk rings outward
-        for (int r = 0; r <= vd && budget > 0; r++) {
-            for (int dx = -r; dx <= r && budget > 0; dx++) {
-                for (int dz = -r; dz <= r && budget > 0; dz++) {
+        outer:
+        for (int r = 0; r <= vd; r++) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
                     if (Math.max(Math.abs(dx), Math.abs(dz)) != r) continue;
                     ChunkPos cp = new ChunkPos(c.x + dx, c.z + dz);
                     Long t = scannedAt.get(cp);
                     if (t != null && now - t < stale) continue;
                     WorldChunk chunk = mc.world.getChunkManager().getWorldChunk(cp.x, cp.z);
                     if (chunk == null) continue;
+                    if (scanned >= maxChunks || System.nanoTime() - start > budgetNanos) { pending = true; break outer; }
                     scanChunk(chunk, cp, targets);
                     scannedAt.put(cp, now);
-                    budget--;
+                    scanned++;
                 }
             }
         }
+        burst = pending;
         cache.keySet().removeIf(cp -> Math.abs(cp.x - c.x) > vd + 2 || Math.abs(cp.z - c.z) > vd + 2);
         scannedAt.keySet().removeIf(cp -> Math.abs(cp.x - c.x) > vd + 2 || Math.abs(cp.z - c.z) > vd + 2);
+        return scanned > 0;
     }
 
     private void scanChunk(WorldChunk chunk, ChunkPos cp, Set<Block> targets) {

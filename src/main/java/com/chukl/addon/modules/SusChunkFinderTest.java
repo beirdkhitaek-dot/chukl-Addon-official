@@ -841,6 +841,8 @@ public class SusChunkFinderTest extends Module {
     private volatile Set<ChunkPos> naturalZone = Set.of();
     private final Map<ChunkPos, Integer> deepScores = new ConcurrentHashMap<>();
     private final Map<ChunkPos, List<BlockPos>> amethystBlocks = new ConcurrentHashMap<>();
+    private int lastAmCount = -1;
+    private boolean amHinted = false;
     private final Set<ChunkPos> lavaChunks = ConcurrentHashMap.newKeySet();
     private final Map<ChunkPos, LitCells> litCells = new ConcurrentHashMap<>();
     private int observedRadius = -1;
@@ -1086,6 +1088,8 @@ public class SusChunkFinderTest extends Module {
         lavaChunks.clear();
         litCells.clear();
         amethystBlocks.clear();
+        lastAmCount = -1;
+        amHinted = false;
         naturalZone = Set.of();
         observedRadius = -1;
         observedChangedAt = System.currentTimeMillis();
@@ -1530,6 +1534,7 @@ public class SusChunkFinderTest extends Module {
 
         if (debugInfo.get() && mc.player.age % 40 == 0) printDebug();
         if (mc.player.age % 100 == 0) announceAdaptation();
+        if (mc.player.age % 100 == 50) amethystStatus();
 
         if (--timer > 0) return;
         timer = 2; // refresh the sus list every other tick
@@ -2126,13 +2131,61 @@ public class SusChunkFinderTest extends Module {
 
     // ---------- target HUD ----------
 
+    /**
+     * The chunk the target HUD is about: only when you look at what is drawn. Best Chunks mode: the best chunk's column,
+     * energy orb or dig shaft. All Chunks mode: the chunk plate.
+     */
+    private ChunkPos lookedTarget(Map<ChunkPos, Integer> sus) {
+        double maxDist = hudDistance.get();
+        if (renderMode.get() != RenderMode.Best_Chunks) {
+            double y = baseY();
+            return SusHud.lookedChunk(sus.keySet(), maxDist, y, y + Math.max(0.1, chunkThickness.get()));
+        }
+        List<ChunkPos> best = bestChunks;
+        if (best.isEmpty()) return null;
+
+        ChunkStyle style = chunkStyle.get();
+        boolean orb = style != ChunkStyle.Column;
+        boolean column = style != ChunkStyle.Energy_Orb;
+        int yMin = Math.min(ugMinY.get(), ugMaxY.get());
+        int yMax = Math.max(ugMinY.get(), ugMaxY.get());
+        int inset = chunkInset.get();
+        double y0 = baseY();
+        double r = Math.max(1.0, orbSize.get());
+        double shaftTop = Math.max(y0, yMax) + 1;
+
+        ChunkPos hit = null;
+        double bestT = Double.MAX_VALUE;
+        for (ChunkPos cp : best) {
+            double t = Double.MAX_VALUE;
+            if (column) {
+                double d = SusHud.hitDist(cp.getStartX() + inset, yMin, cp.getStartZ() + inset,
+                    cp.getStartX() + 16 - inset, yMax + 1, cp.getStartZ() + 16 - inset, maxDist);
+                if (d >= 0) t = Math.min(t, d);
+            }
+            if (orb) {
+                double ox = cp.getStartX() + 8.0, oz = cp.getStartZ() + 8.0;
+                double d = SusHud.hitDist(ox - r, y0 - r, oz - r, ox + r, y0 + r, oz + r, maxDist);
+                if (d >= 0) t = Math.min(t, d);
+            }
+            if (showShaft.get()) {
+                BlockPos tg = digTarget(cp);
+                double d = SusHud.hitDist(tg.getX(), yMin, tg.getZ(), tg.getX() + 1, shaftTop, tg.getZ() + 1, maxDist);
+                if (d >= 0) t = Math.min(t, d);
+            }
+            if (t < bestT) { bestT = t; hit = cp; }
+        }
+        return hit;
+    }
+
+
     @EventHandler
     private void onHud(Render2DEvent event) {
         if (!hudOn.get() || mc.player == null || mc.world == null || mc.options.hudHidden) return;
         Map<ChunkPos, Integer> sus = susChunks;
         if (sus.isEmpty()) return;
 
-        ChunkPos cp = SusHud.lookedChunk(sus.keySet(), hudDistance.get(), -64, 320);
+        ChunkPos cp = lookedTarget(sus);
         if (cp == null) return;
 
         int need = Math.max(1, effectiveSensitivity());
@@ -2368,6 +2421,23 @@ public class SusChunkFinderTest extends Module {
                 event.renderer.box(x, y, z, x + 1, y + 1, z + 1, c, c, ShapeMode.Sides, 0);
                 drawn++;
             }
+        }
+    }
+
+    /** Tells you in chat how many deep amethyst clusters were found, so you can tell "none here" from "the server hides them". */
+    private void amethystStatus() {
+        if (!deepAm.get() || !isOverworld(mc.world)) return;
+        int n = 0;
+        for (List<BlockPos> l : amethystBlocks.values()) n += l.size();
+        int lo = Math.min(amMinY.get(), amMaxY.get()), hi = Math.max(amMinY.get(), amMaxY.get());
+        if (n != lastAmCount) {
+            lastAmCount = n;
+            if (n > 0) info("Deep amethyst: " + n + " grown clusters in " + amethystBlocks.size() + " chunks (Y " + lo + " to " + hi + ").");
+        }
+        if (n == 0 && !amHinted && loadedChunks.size() >= 100) {
+            amHinted = true;
+            info("Deep amethyst: none found in Y " + lo + " to " + hi + " among " + loadedChunks.size()
+                + " loaded chunks. If you expect some, this server may not send blocks that deep until you are close.");
         }
     }
 

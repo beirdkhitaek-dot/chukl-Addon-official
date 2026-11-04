@@ -2,6 +2,7 @@ package com.chukl.addon.modules;
 
 import com.chukl.addon.ChuklAddon;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
+import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
@@ -13,6 +14,7 @@ import meteordevelopment.meteorclient.utils.world.TickRate;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.SharedConstants;
 import net.minecraft.client.network.PlayerListEntry;
+import net.minecraft.network.packet.s2c.common.DisconnectS2CPacket;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -40,11 +42,25 @@ public class ServerDataCollector extends Module {
         .name("chunk-radius").description("Measure the real chunk radius the server sends you (can be smaller than your render distance).")
         .defaultValue(true).build());
 
+    private final Setting<Boolean> anticheat = sg.add(new BoolSetting.Builder()
+        .name("anticheat-indicators")
+        .description("Passive observation only: counts how often the server moves you back (position corrections), notes anticheat names that appear in server messages (names only, never the text), and records the server's kick reason. Nothing is sent to the server and nothing is probed.")
+        .defaultValue(true).build());
+
     private final Setting<Boolean> writeOnJoin = sg.add(new BoolSetting.Builder()
         .name("write-on-join").description("Write a line right after you join a world or server.")
         .defaultValue(true).build());
 
+    /** Anticheat product names that servers commonly show in messages. Only the matched name is ever stored. */
+    private static final String[] AC_NAMES = {
+        "nocheatplus", "grim", "vulcan", "matrix", "spartan", "verus", "intave", "themis", "polar", "karhu",
+        "negativity", "aac", "anticheat", "anti-cheat", "antixray", "anti-xray", "watchdog", "hawk"
+    };
+
     private final Map<String, Integer> packetCounts = new HashMap<>();
+    private final Map<String, Integer> acMentions = new HashMap<>();
+    private int corrections = 0;
+    private int sinceJoinTicks = 0;
     private long packetTotal = 0;
     private long lastWrite = 0;
     private int lines = 0;
@@ -54,12 +70,15 @@ public class ServerDataCollector extends Module {
 
     public ServerDataCollector() {
         super(ChuklAddon.CATEGORY, "server-data-collector",
-            "Research: writes technical facts about the server (brand, version, chunk radius, tick rate, ping, packet rates) to a file. No player names, chat or positions.");
+            "Research: writes technical facts about the server (brand, version, chunk radius, tick rate, ping, packet rates, passive anticheat indicators) to a file. No player names, chat text or positions.");
     }
 
     @Override
     public void onActivate() {
         packetCounts.clear();
+        acMentions.clear();
+        corrections = 0;
+        sinceJoinTicks = 0;
         packetTotal = 0;
         lastWrite = System.currentTimeMillis();
         lines = 0;
@@ -70,6 +89,8 @@ public class ServerDataCollector extends Module {
 
     @EventHandler
     private void onLeft(GameLeftEvent event) {
+        sinceJoinTicks = 0;
+        synchronized (acMentions) { acMentions.clear(); corrections = 0; }
         packetCounts.clear();
         packetTotal = 0;
         pendingJoin = writeOnJoin.get();
@@ -78,16 +99,40 @@ public class ServerDataCollector extends Module {
 
     @EventHandler
     private void onPacket(PacketEvent.Receive event) {
+        String name = event.packet.getClass().getSimpleName();
+        if (anticheat.get()) {
+            // the server teleporting you after the join sequence = it corrected your movement
+            if (name.equals("PlayerPositionLookS2CPacket") && sinceJoinTicks > 200) {
+                synchronized (acMentions) { corrections++; }
+            }
+            if (event.packet instanceof DisconnectS2CPacket d) {
+                String reason = d.reason() == null ? "" : d.reason().getString();
+                if (reason.length() > 200) reason = reason.substring(0, 200);
+                ResearchFiles.appendLine("server-data-" + ResearchFiles.serverName() + ".jsonl",
+                    "{\"type\":\"kick\",\"time\":" + ResearchFiles.json(Instant.now().toString())
+                        + ",\"reason\":" + ResearchFiles.json(reason) + "}");
+            }
+        }
         if (!packetStats.get()) return;
         synchronized (packetCounts) {
             packetTotal++;
-            packetCounts.merge(event.packet.getClass().getSimpleName(), 1, Integer::sum);
+            packetCounts.merge(name, 1, Integer::sum);
+        }
+    }
+
+    @EventHandler
+    private void onMessage(ReceiveMessageEvent event) {
+        if (!anticheat.get()) return;
+        String text = event.getMessage().getString().toLowerCase(java.util.Locale.ROOT);
+        for (String n : AC_NAMES) {
+            if (text.contains(n)) synchronized (acMentions) { acMentions.merge(n, 1, Integer::sum); }
         }
     }
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.world == null || mc.player == null || mc.getNetworkHandler() == null) return;
+        sinceJoinTicks++;
         long now = System.currentTimeMillis();
         if (pendingJoin) {
             if (--joinDelay > 0) return; // give the server a moment to send the world and chunks
@@ -135,6 +180,25 @@ public class ServerDataCollector extends Module {
         sb.append(",\"clientViewDistance\":").append(mc.options.getViewDistance().getValue());
         sb.append(",\"clientSimulationDistance\":").append(mc.options.getSimulationDistance().getValue());
         if (chunkRadius.get()) sb.append(",\"realChunkRadius\":").append(measureRadius());
+
+        if (anticheat.get()) {
+            int corr;
+            Map<String, Integer> mentions;
+            synchronized (acMentions) {
+                corr = corrections;
+                mentions = new HashMap<>(acMentions);
+                corrections = 0;
+                acMentions.clear();
+            }
+            sb.append(",\"positionCorrections\":").append(corr);
+            sb.append(",\"anticheatNamesSeen\":{");
+            int k = 0;
+            for (Map.Entry<String, Integer> e : mentions.entrySet()) {
+                if (k++ > 0) sb.append(',');
+                sb.append(ResearchFiles.json(e.getKey())).append(':').append(e.getValue());
+            }
+            sb.append('}');
+        }
 
         var border = mc.world.getWorldBorder();
         sb.append(",\"borderSize\":").append(String.format(java.util.Locale.ROOT, "%.1f", border.getSize()));
