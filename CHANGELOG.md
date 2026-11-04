@@ -3,6 +3,18 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.36.0 - Steady Chunk Pick And Research Modules
+**What's new**
+- **Chukl Sus Chunk Test** no longer jumps around. The best chunk now stays put: it keeps its pick for at least 15 seconds, and another chunk only takes over when it is clearly stronger (50% higher score) and stays ahead for 3 seconds. The dig spot of the picked chunk also stays fixed.
+- **Chukl Sus Chunk Test** no longer picks chunks that probably have a natural cause: chunks in or next to natural structures (mineshaft, stronghold, dungeon, ancient city, trial chamber, geode) and chunks lit only by light next to lava. Very strong evidence is still allowed, in case a base sits inside a structure.
+- New research module **Server Data Collector** (`server-data-collector`, category Chukl): writes technical facts about the server (software brand, version, real chunk radius, tick rate, your ping, packet rates, world border) to a file. It never records other players' names, chat or positions.
+- New research module **Seed Finder** (`seed-finder`, category Chukl), stage 1: records the ore veins of the chunks you load (ore type, size, block positions) to a file, as the input for a seed solver. The solver that turns this into a world seed is not included yet.
+
+**How to use**
+- Sus Chunk Test: nothing to do, the steadier pick is on by default. In the Render settings you can change `pick-lock-seconds` (0 = may switch any time), `switch-margin-percent` (higher = steadier) and `avoid-natural` (turn off to allow natural-looking chunks again).
+- Research modules: turn them on and play normally. Data goes to `meteor-client/chukl-research/` (`server-data-<server>.jsonl` and `ore-veins-<server>.jsonl`, one JSON object per line). The module prints the exact folder when you turn it on.
+- Seed Finder works best in areas nobody has mined: ores that players already mined are missing, and servers with anti-xray can hide or fake ores. On phones, keep `chunks-per-tick` at 1.
+
 ## v1.35.1 - Release Notes For Everyone
 **What's new**
 - Every release now comes with plain release notes: what changed and how to use it.

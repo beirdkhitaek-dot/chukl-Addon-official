@@ -340,6 +340,35 @@ public class SusChunkFinderTest extends Module {
         .build()
     );
 
+    private final Setting<Boolean> avoidNatural = sgRender.add(new BoolSetting.Builder()
+        .name("avoid-natural")
+        .description("Never pick a chunk that probably has a natural cause: inside or next to a natural structure (mineshaft, stronghold, dungeon, ancient city, trial chamber, geode), "
+            + "or lit only by light next to lava. A chunk with very strong evidence is still allowed. If every candidate looks natural, nothing is shown.")
+        .defaultValue(true)
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
+        .build()
+    );
+
+    private final Setting<Integer> pickLockSeconds = sgRender.add(new IntSetting.Builder()
+        .name("pick-lock-seconds")
+        .description("Once a best chunk is picked, it stays for at least this long, so the marker does not jump around while chunks load or you move.")
+        .defaultValue(15)
+        .range(0, 300)
+        .sliderRange(0, 60)
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
+        .build()
+    );
+
+    private final Setting<Integer> switchMargin = sgRender.add(new IntSetting.Builder()
+        .name("switch-margin-percent")
+        .description("Another chunk must beat the current pick's score by this many percent (and stay ahead for 3 seconds) to replace it. Higher = steadier.")
+        .defaultValue(50)
+        .range(0, 500)
+        .sliderRange(0, 200)
+        .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
+        .build()
+    );
+
     private final Setting<Boolean> verifyChunk = sgRender.add(new BoolSetting.Builder()
         .name("verify-chunk")
         .description("When a best chunk shows up, re-read its real chunk data (and every chunk that contributes to it) and show the true scan progress. "
@@ -789,6 +818,11 @@ public class SusChunkFinderTest extends Module {
     private volatile int verifyUnits = 0;
     private volatile int verifyUnitsDone = 0;
     private ChunkPos lastAnnounced;
+    private long pickLockedAt = 0, curMissingSince = 0, challengerSince = 0;
+    private ChunkPos challenger;
+    private volatile ChunkPos pinnedChunk;
+    private volatile BlockPos pinnedTarget;
+    private volatile boolean pinnedFallback;
     private int lastUgSig;
     private int ugMaskCache = -1;
     private Map<Block, Integer> ugMapCache = Map.of();
@@ -992,6 +1026,12 @@ public class SusChunkFinderTest extends Module {
         ugFlagged = Set.of();
         bestChunks = List.of();
         lastAnnounced = null;
+        pickLockedAt = 0;
+        curMissingSince = 0;
+        challenger = null;
+        challengerSince = 0;
+        pinnedChunk = null;
+        pinnedTarget = null;
         rejected.clear();
         confirmed.clear();
         probed.clear();
@@ -1904,38 +1944,96 @@ public class SusChunkFinderTest extends Module {
         return heatmap.getOrDefault(c, 0) + effUg(c) + 5.0 * levels.getOrDefault(c, 0);
     }
 
-    /** Picks the best chunk(s) to dig: most evidence first, nearest first on ties. Keeps the old pick unless something beats it. */
-    private List<ChunkPos> pickBest(Map<ChunkPos, Integer> sus) {
-        if (sus.isEmpty() || mc.player == null) return List.of();
+    /** True when a chunk's evidence probably has a natural cause (structure, or light next to lava) and is not overwhelming. */
+    private boolean probablyNatural(ChunkPos c) {
+        int need = Math.max(1, effectiveSensitivity());
+        int heat = heatmap.getOrDefault(c, 0);
+        if (effUg(c) >= ugThreshold.get() * 3 || heat >= need * 3) return false; // overwhelming evidence: could be a base inside it
+        if (naturalZone.contains(c) || natMask.containsKey(c)) return true;
+        return lavaNear(c) && ugScores.getOrDefault(c, 0) == 0 && heat < need;
+    }
 
+    /**
+     * Picks the best chunk(s) to dig. The pick is sticky: it stays for at least pick-lock-seconds, and another chunk only
+     * replaces it when it is clearly stronger (switch-margin-percent) for a few seconds in a row. Chunks that probably have
+     * a natural cause are never picked (avoid-natural).
+     */
+    private List<ChunkPos> pickBest(Map<ChunkPos, Integer> sus) {
+        if (mc.player == null) return List.of();
+        long now = System.currentTimeMillis();
+        boolean avoid = avoidNatural.get();
         int view = mc.options.getViewDistance().getValue();
         ChunkPos here = mc.player.getChunkPos();
         Map<ChunkPos, Integer> levels = susLevel;
 
-        List<ChunkPos> list = new ArrayList<>(sus.keySet());
-        list.removeIf(c -> Math.max(Math.abs(c.x - here.x), Math.abs(c.z - here.z)) > view);
-        if (list.isEmpty()) return List.of();
-
+        List<ChunkPos> list = new ArrayList<>();
+        for (ChunkPos c : sus.keySet()) {
+            if (Math.max(Math.abs(c.x - here.x), Math.abs(c.z - here.z)) > view) continue;
+            if (avoid && probablyNatural(c)) continue;
+            list.add(c);
+        }
         list.sort(java.util.Comparator
             .comparingDouble((ChunkPos c) -> -rank(c, levels))
             .thenComparingInt(c -> (c.x - here.x) * (c.x - here.x) + (c.z - here.z) * (c.z - here.z)));
+        ChunkPos top = list.isEmpty() ? null : list.get(0);
 
-        ChunkPos prev = lastAnnounced;
-        if (prev != null && list.contains(prev) && rank(prev, levels) >= rank(list.get(0), levels)) {
-            list.remove(prev);
-            list.add(0, prev); // no flip-flopping between equal chunks while you walk around
+        // does the current pick still hold? A short flicker out of the list is forgiven for 4 seconds
+        ChunkPos cur = lastAnnounced;
+        boolean curValid = false;
+        if (cur != null) {
+            boolean hardOut = rejected.contains(cur) || (avoid && probablyNatural(cur));
+            curValid = sus.containsKey(cur) && !hardOut;
+            if (curValid) curMissingSince = 0;
+            else if (!hardOut) {
+                if (curMissingSince == 0) curMissingSince = now;
+                curValid = now - curMissingSince < 4000;
+            }
         }
 
-        List<ChunkPos> out = new ArrayList<>(list.subList(0, Math.min(chunksShown.get(), list.size())));
-
-        ChunkPos top = out.get(0);
-        if (!top.equals(lastAnnounced)) {
-            lastAnnounced = top;
-            if (announceBest.get() && renderMode.get() == RenderMode.Best_Chunks) {
-                BlockPos t = digTarget(top);
-                info("Best dig spot: X " + t.getX() + "  Z " + t.getZ() + "  (chunk " + top.x + ", " + top.z
-                    + ", score " + (int) rank(top, levels) + ", underground " + effUg(top) + ")");
+        ChunkPos pick;
+        if (curValid) {
+            pick = cur;
+            if (top != null && !top.equals(cur)) {
+                double needed = rank(cur, levels) * (1.0 + switchMargin.get() / 100.0) + 1.0;
+                if (rank(top, levels) > needed) {
+                    if (!top.equals(challenger)) { challenger = top; challengerSince = now; }
+                    boolean unlocked = now - pickLockedAt >= pickLockSeconds.get() * 1000L;
+                    if (unlocked && now - challengerSince >= 3000) pick = top;
+                } else {
+                    challenger = null;
+                }
+            } else {
+                challenger = null;
             }
+        } else {
+            pick = top;
+        }
+
+        if (pick == null) {
+            lastAnnounced = null;
+            challenger = null;
+            return List.of();
+        }
+
+        if (!pick.equals(lastAnnounced)) {
+            lastAnnounced = pick;
+            pickLockedAt = now;
+            curMissingSince = 0;
+            challenger = null;
+            pinnedChunk = pick;
+            pinnedTarget = null;
+            if (announceBest.get() && renderMode.get() == RenderMode.Best_Chunks) {
+                BlockPos t = digTarget(pick);
+                info("Best dig spot: X " + t.getX() + "  Z " + t.getZ() + "  (chunk " + pick.x + ", " + pick.z
+                    + ", score " + (int) rank(pick, levels) + ", underground " + effUg(pick) + ")");
+            }
+        }
+
+        List<ChunkPos> out = new ArrayList<>();
+        out.add(pick);
+        for (ChunkPos c : list) {
+            if (out.size() >= chunksShown.get()) break;
+            if (!c.equals(pick)) out.add(c);
         }
         return out;
     }
@@ -2108,7 +2206,18 @@ public class SusChunkFinderTest extends Module {
     /** Where to dig: the middle of the underground blocks found in the chunk, or the chunk center if there are none. */
     private BlockPos digTarget(ChunkPos c) {
         BlockPos t = ugTargets.get(c);
-        return t != null ? t : new BlockPos(c.getStartX() + 8, 0, c.getStartZ() + 8);
+        BlockPos fallback = new BlockPos(c.getStartX() + 8, 0, c.getStartZ() + 8);
+        if (c.equals(pinnedChunk)) {
+            // the picked chunk keeps its dig spot; it only moves once, from the chunk center to a real found block
+            BlockPos cached = pinnedTarget;
+            if (cached == null || (pinnedFallback && t != null)) {
+                cached = t != null ? t : fallback;
+                pinnedFallback = t == null;
+                pinnedTarget = cached;
+            }
+            return cached;
+        }
+        return t != null ? t : fallback;
     }
 
     /** Used by GoodRoad: dig spots of all currently flagged chunks. */
