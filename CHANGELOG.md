@@ -3,6 +3,16 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.37.1 - Deep Amethyst For The Original Sus Chunk Finder
+**What's new**
+- The original **Chukl Sus Chunk** (`chukl-sus-chunk`) now has the same **Deep Amethyst** settings as the test version: boxes on fully grown amethyst clusters between Y -64 and -29, visible through walls. Only grown clusters, not buds.
+- It also has the `world-seed` setting (stored for the future seed solver, no effect on detection yet).
+- Grown clusters already counted as sus evidence in this module through the normal `amethyst` setting at every depth, so the new part only adds the boxes.
+
+**How to use**
+- Open **Chukl Sus Chunk**, then the **Deep Amethyst** group. `deep-amethyst` turns the boxes on or off, `amethyst-min-y` / `amethyst-max-y` set the range, and `amethyst-max-boxes` keeps it light on phones. Changing these rescans the loaded chunks automatically.
+- Boxes inside a natural geode are natural. Overworld only.
+
 ## v1.37.0 - Deep Amethyst And Seed Field
 **What's new**
 - **Chukl Sus Chunk Test** now sees fully grown amethyst clusters deep underground (Y -64 to -29 by default). It draws boxes on them that you can see through walls, and counts them as evidence: each cluster adds 1 point to the chunk's underground score (at most 12 per chunk), which also raises its best-chunk ranking. Only fully grown clusters count, not buds.
