@@ -14,7 +14,7 @@ final class SusHud {
     private SusHud() {}
 
     /** The nearest chunk column (from the given set) that your crosshair ray passes through, or null. */
-    static ChunkPos lookedChunk(Collection<ChunkPos> chunks, double maxDist, int yMin, int yMax) {
+    static ChunkPos lookedChunk(Collection<ChunkPos> chunks, double maxDist, double yMin, double yMax) {
         MinecraftClient mc = MinecraftClient.getInstance();
         if (mc.player == null || chunks.isEmpty()) return null;
         Vec3d o = mc.player.getCameraPosVec(1.0F);
