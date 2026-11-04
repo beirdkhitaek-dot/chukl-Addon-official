@@ -3,6 +3,21 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.40.0 - Seed Finder Structure Analyzer And Solver
+**What's new**
+- **Structure analyzer:** **Seed Finder** now also recognises structures from the blocks of the chunks you load: desert temples, jungle temples, igloos, swamp huts, ocean monuments, pillager outposts, strongholds, ancient cities, trial chambers, mineshafts, villages, nether fortresses, bastions and ruined portals. Each one is written to `meteor-client/chukl-research/structures-<server>.jsonl` (kind, chunk, a block position, block counts). Setting: `analyze-structures` (on by default).
+- **Solver:** a new Solver group tests seeds against the structures you recorded. It uses the compact kinds (desert temple, jungle temple, igloo, swamp hut, pillager outpost, ocean monument) and counts how many of them a seed would have placed where you found them. A seed that explains nearly all of them is almost certainly right.
+  - `candidate-seeds`: seeds you want to check (numbers, or text like Minecraft turns into a seed).
+  - `search-range`, `search-from`, `search-million`, `solver-threads`: also test a range of numbers in the background.
+  - `run-solver`: turn it on to start; the result is in chat and in `seed-solver-<server>.txt`.
+- **Honest limits:** a range search only finds seeds that are inside the range you give. Searching every possible seed is far too big for a phone. The placement numbers are written from memory and have not been checked against a world with a known seed, so test with a world whose seed you know first.
+
+**How to use**
+1. Turn on **Seed Finder** and walk around a world or server. Watch for the info text "N structures".
+2. When you have found at least 3 of the compact kinds (more is better), open the **Solver** group. Put the seed you suspect in `candidate-seeds`, or turn on `search-range`.
+3. Turn on `run-solver`. A line like "Seed 12345 explains 5 of 5 structures" means a strong match. Turn the module off to stop a running search.
+4. First time: try it on a world where you know the seed, to confirm it reports your seed.
+
 ## v1.39.0 - Rounded Plates And Smooth Animations
 **What's new**
 - **Rounded corners (both Sus Chunk modules):** chunk plates and the best-chunk column now have rounded corners. New setting `corner-radius` (default 3 blocks, 0 = sharp).
