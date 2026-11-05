@@ -38,6 +38,17 @@ public final class MdlModel {
         public int animIndex;
         public int numBlends;
         public int group;
+        /** Range in degrees that the blends of this sequence cover (pitch for the aim animations of player models). */
+        public float blendStart, blendEnd;
+        /** Total movement of the sequence in model units (x forward, y left, z up). */
+        public final float[] linear = new float[3];
+
+        /** Speed the feet move at in model units per second (0 when the sequence does not move). */
+        public float groundSpeed() {
+            float d = (float) Math.sqrt(linear[0] * linear[0] + linear[1] * linear[1]);
+            float seconds = numFrames > 1 && fps > 0 ? (numFrames - 1) / fps : 0;
+            return seconds > 0 ? d / seconds : 0;
+        }
 
         public boolean looping() { return (flags & 1) != 0; }
         public boolean usable() { return group == 0 && numFrames > 0 && animIndex > 0; }
@@ -136,7 +147,10 @@ public final class MdlModel {
             s.fps = f32(p + 32);
             s.flags = i32(p + 36);
             s.numFrames = i32(p + 56);
+            for (int k = 0; k < 3; k++) s.linear[k] = f32(p + 76 + k * 4);
             s.numBlends = i32(p + 120);
+            s.blendStart = f32(p + 136);
+            s.blendEnd = f32(p + 144);
             s.animIndex = i32(p + 124);
             s.group = i32(p + 156);
             seqs[i] = s;
@@ -265,9 +279,11 @@ public final class MdlModel {
     // ---------------------------------------------------------------- animation
 
     /** Value of one animation channel (0-2 position, 3-5 rotation) of a bone at a frame, in model units / radians. */
-    private float channel(Seq s, int bone, int c, int frame) {
+    private float channel(Seq s, int bone, int c, int frame) { return channel(s, 0, bone, c, frame); }
+
+    private float channel(Seq s, int blend, int bone, int c, int frame) {
         Bone bn = bones[bone];
-        int base = s.animIndex + bone * 12;
+        int base = s.animIndex + (blend * bones.length + bone) * 12;
         int off = u16(base + c * 2);
         float def = c < 3 ? bn.pos[c] : bn.rot[c - 3];
         float sc = c < 3 ? bn.posScale[c] : bn.rotScale[c - 3];
@@ -341,6 +357,107 @@ public final class MdlModel {
             } else {
                 concat(out[par], local[i], out[i]);
             }
+        }
+        return out;
+    }
+
+
+    private boolean[] upperMaskCache;
+
+    /**
+     * Bones of the upper body: the "Bip01 Spine" bone and everything below it in the hierarchy. Counter-Strike plays the
+     * weapon animation (aim, shoot, reload) on these and the gait animation (walk, run, jump) on all other bones.
+     */
+    public synchronized boolean[] upperBodyMask() {
+        if (upperMaskCache != null) return upperMaskCache;
+        boolean[] m = new boolean[bones.length];
+        int spine = -1;
+        for (int i = 0; i < bones.length; i++) {
+            String n = bones[i].name == null ? "" : bones[i].name.toLowerCase(Locale.ROOT);
+            if (n.equals("bip01 spine")) { spine = i; break; }
+        }
+        if (spine >= 0) {
+            for (int i = 0; i < bones.length; i++) {
+                int b = i;
+                int guard = 0;
+                while (b >= 0 && guard++ < 64) {
+                    if (b == spine) { m[i] = true; break; }
+                    b = bones[b].parent;
+                }
+            }
+        }
+        upperMaskCache = m;
+        return m;
+    }
+
+    /** Position and rotation of one bone for a sequence at a frame and blend (0 to 1 across the sequence's blends). */
+    private void sampleBone(Seq s, float frame, boolean wrap, float blend01, int bone, float[] pos, float[] quat) {
+        if (s == null || !s.usable()) {
+            Bone bn = bones[bone];
+            pos[0] = bn.pos[0]; pos[1] = bn.pos[1]; pos[2] = bn.pos[2];
+            float[] q = quat(bn.rot[0], bn.rot[1], bn.rot[2]);
+            System.arraycopy(q, 0, quat, 0, 4);
+            return;
+        }
+        int nf = s.numFrames;
+        if (wrap && nf > 0) frame = ((frame % nf) + nf) % nf;
+        frame = Math.max(0, Math.min(frame, nf - 1));
+        int f0 = (int) Math.floor(frame);
+        float t = frame - f0;
+        int f1 = f0 + 1;
+        if (f1 >= nf) f1 = wrap ? 0 : nf - 1;
+
+        int nb = Math.max(1, s.numBlends);
+        float fb = Math.max(0f, Math.min(1f, blend01)) * (nb - 1);
+        int b0 = (int) Math.floor(fb);
+        int b1 = Math.min(nb - 1, b0 + 1);
+        float tb = fb - b0;
+
+        float[] p0 = new float[3], p1 = new float[3];
+        float[] q0 = new float[4], q1 = new float[4];
+        sampleOne(s, b0, bone, f0, f1, t, p0, q0);
+        if (b1 != b0 && tb > 0.001f) {
+            sampleOne(s, b1, bone, f0, f1, t, p1, q1);
+            for (int k = 0; k < 3; k++) pos[k] = lerp(p0[k], p1[k], tb);
+            float[] q = slerp(q0, q1, tb);
+            System.arraycopy(q, 0, quat, 0, 4);
+        } else {
+            System.arraycopy(p0, 0, pos, 0, 3);
+            System.arraycopy(q0, 0, quat, 0, 4);
+        }
+    }
+
+    private void sampleOne(Seq s, int blend, int bone, int f0, int f1, float t, float[] pos, float[] quat) {
+        for (int c = 0; c < 3; c++) pos[c] = lerp(channel(s, blend, bone, c, f0), channel(s, blend, bone, c, f1), t);
+        float[] qa = quat(channel(s, blend, bone, 3, f0), channel(s, blend, bone, 4, f0), channel(s, blend, bone, 5, f0));
+        float[] qb = quat(channel(s, blend, bone, 3, f1), channel(s, blend, bone, 4, f1), channel(s, blend, bone, 5, f1));
+        float[] q = slerp(qa, qb, t);
+        System.arraycopy(q, 0, quat, 0, 4);
+    }
+
+    /**
+     * Counter-Strike player pose: the upper-body bones come from {@code upperSeq} (with its pitch blend), all other bones
+     * from {@code gaitSeq}. Pass -1 as upperSeq to use the gait sequence for the whole body.
+     */
+    public float[][] poseCs(int upperSeq, float upperFrame, boolean upperWrap, float upperBlend,
+                            int gaitSeq, float gaitFrame, boolean gaitWrap) {
+        int n = bones.length;
+        boolean[] upper = upperBodyMask();
+        Seq us = (upperSeq >= 0 && upperSeq < seqs.length) ? seqs[upperSeq] : null;
+        Seq gs = (gaitSeq >= 0 && gaitSeq < seqs.length) ? seqs[gaitSeq] : null;
+        float[][] local = new float[n][12];
+        float[][] out = new float[n][12];
+        float[] pos = new float[3], q = new float[4];
+        for (int i = 0; i < n; i++) {
+            boolean useUpper = us != null && upper[i];
+            if (useUpper) sampleBone(us, upperFrame, upperWrap, upperBlend, i, pos, q);
+            else sampleBone(gs != null ? gs : us, gs != null ? gaitFrame : upperFrame, gs != null ? gaitWrap : upperWrap, 0f, i, pos, q);
+            quatToMatrix(q, pos[0], pos[1], pos[2], local[i]);
+        }
+        for (int i = 0; i < n; i++) {
+            int par = bones[i].parent;
+            if (par < 0 || par >= i) System.arraycopy(local[i], 0, out[i], 0, 12);
+            else concat(out[par], local[i], out[i]);
         }
         return out;
     }

@@ -3,6 +3,20 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.42.0 - CS16 Player Model
+**What's new**
+- **New module: CS16 Player Model** (Visual category). Players are drawn as Counter-Strike 1.6 player models (.mdl) that you import, with real textures, lighting and the vanilla name tag.
+- **CS-style animation**: legs play idle, walk, run, crouch, jump and swim at the speed the player really moves; the upper body plays the held item's weapon animation (knife, pistol, rifle...), follows where the player looks, plays an attack animation on every swing, and a dying player plays a CS death animation.
+- **CS16 Knife support**: the knife attaches to the CS model's right hand on players using this module.
+- Settings: model, own-model, random-per-player, apply-to, size, distance, hide-vanilla-armor, weapon-pose, attack-speed, death-animation, invert-pitch, facing-offset.
+- Not tested in-game yet. If a player looks wrong, tell me which model and what you see.
+
+**How to use**
+- Put player models (for example `sas/sas.mdl` with its texture file) in the `cs16-players` folder next to your other chukl-visual folders. Press **Refresh** in the module settings to see the exact path and the models found.
+- Enable **CS16 Player Model**. Use Previous / Next model to switch.
+- Model upside down or facing backwards: try invert-pitch or facing-offset 180.
+- Replace the old jar with `chukl-addon-1.42.0.jar`.
+
 ## v1.41.2 - Fix Startup Crash From The Knife Hand Mixin
 **What's new**
 - **Fixed a crash on startup** in v1.41.0 and v1.41.1: the game stopped with "Mixin transformation of net.minecraft.class_10426 failed". The hook that hides the vanilla sword in third person had the wrong method signature for Minecraft 1.21.11 (it was missing the float parameter). It now matches.

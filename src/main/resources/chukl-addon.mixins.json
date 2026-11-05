@@ -11,6 +11,7 @@
     "InGameHudMixin",
     "InputAccessor",
     "KeyboardInputMixin",
+    "LivingEntityRendererMixin",
     "MouseMixin"
   ],
   "injectors": {

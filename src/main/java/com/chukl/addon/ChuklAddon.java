@@ -7,6 +7,7 @@ import com.chukl.addon.modules.GoatBlockEsp;
 import com.chukl.addon.modules.FrostStorageEsp;
 import com.chukl.addon.modules.GoodRoad;
 import com.chukl.addon.modules.Cs16Knife;
+import com.chukl.addon.modules.PlayerModelCs16;
 import com.chukl.addon.modules.DeathGhost;
 import com.chukl.addon.modules.GrenadeCallout;
 import com.chukl.addon.modules.KillBell;
@@ -78,6 +79,7 @@ public class ChuklAddon extends MeteorAddon {
         Modules.get().add(new KillBell());
         Modules.get().add(new DeathGhost());
         Modules.get().add(new Cs16Knife());
+        Modules.get().add(new PlayerModelCs16());
 
         // Water Client render modules (Chukl Render category)
         Modules.get().add(new AmethystESP());
