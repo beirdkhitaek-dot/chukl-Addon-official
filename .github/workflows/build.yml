@@ -23,6 +23,17 @@ jobs:
       - name: Build
         run: gradle build --no-daemon
 
+      - name: Inspect signatures
+        run: |
+          JAR=$(find ~/.gradle /home/runner/work -name "minecraft-*.jar" ! -name "*sources*" 2>/dev/null | grep -i -E "merged|client|mapped|yarn" | head -5)
+          echo "JARS: $JAR"
+          for J in $JAR; do
+            echo "=== $J"
+            for C in net.minecraft.client.render.entity.LivingEntityRenderer net.minecraft.client.render.entity.EntityRenderer net.minecraft.client.render.entity.PlayerEntityRenderer net.minecraft.client.render.entity.EntityRenderDispatcher net.minecraft.client.render.entity.state.ArmedEntityRenderState net.minecraft.client.render.entity.state.LivingEntityRenderState net.minecraft.client.render.entity.state.PlayerEntityRenderState net.minecraft.client.render.entity.state.EntityRenderState net.minecraft.client.render.item.ItemRenderState net.minecraft.client.render.command.OrderedRenderCommandQueue net.minecraft.client.render.state.CameraRenderState net.minecraft.client.render.entity.feature.HeldItemFeatureRenderer net.minecraft.client.render.entity.feature.FeatureRenderer; do
+              echo "--- $C"; javap -p -cp "$J" $C 2>&1 | head -60
+            done
+          done
+
       - name: Upload jar
         uses: actions/upload-artifact@v4
         with:
