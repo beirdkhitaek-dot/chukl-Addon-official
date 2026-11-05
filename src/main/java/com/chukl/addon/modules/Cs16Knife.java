@@ -624,7 +624,8 @@ public class Cs16Knife extends Module {
     private boolean worldTarget(LivingEntity e) {
         if (!(e instanceof PlayerEntity p) || mc.player == null || wmesh == null || model == null) return false;
         if (p == mc.player) {
-            if (!thirdPerson.get() || mc.options.getPerspective().isFirstPerson()) return false;
+            // the own body is drawn in third person and in every freecam (any client or addon), never in first person
+            if (!thirdPerson.get() || System.nanoTime() - com.chukl.addon.cs16.Cs16Hooks.ownRenderNanos > 300_000_000L) return false;
         } else if (!otherPlayers.get()) return false;
         if (p.isSpectator()) return false;
         double d = worldDistance.get();

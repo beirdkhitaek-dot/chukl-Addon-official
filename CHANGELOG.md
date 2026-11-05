@@ -3,6 +3,19 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.42.2 - CS16 Player Model: Sitting, Swimming, Head Look, Knife In Freecam
+**What's new**
+- **Sitting**: a player riding a boat, minecart, horse or anything else now sits (thighs forward, shins down). CS has no sitting animation, so it is built from the leg bones.
+- **Swimming**: the flat swim animation now tilts up and down with where the player looks, and the upper body no longer pops upright while swimming. Treading water without swimming uses the CS tread-water animation. Nothing to switch on, it is automatic.
+- **Head look**: the model's head now turns to where the player looks (left, right, up, down), like in CS.
+- **Knife model in freecam and third person**: the CS knife in your hand is now shown whenever your own body is visible, so it works with Meteor Freecam, other clients' freecam and any addon freecam, and in third person.
+- **Swing animation**: the attack animation is faster by default (attack-speed 3.0, was 2.0) so it keeps up with Minecraft swings.
+- Not tested in-game yet. If something is still wrong, send a video like before.
+
+**How to use**
+- Nothing to set up. Replace the old jar with `chukl-addon-1.42.2.jar`.
+- If the head or body tilts the wrong way when looking up or down, turn on invert-pitch in CS16 Player Model > Animation.
+
 ## v1.42.1 - CS16 Player Model: Items In Hand
 **What's new**
 - **Held items now sit in the CS model's hand** and follow its animation (walk, run, attack, crouch), for both hands. Before, they stayed at the invisible vanilla arm.

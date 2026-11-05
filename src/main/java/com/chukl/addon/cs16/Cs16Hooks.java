@@ -29,4 +29,7 @@ public final class Cs16Hooks {
 
     /** Null while no Player Model module is active. */
     public static volatile RigProvider rigProvider;
+
+    /** When the vanilla renderer last drew the local player's body (third person and any freecam, never first person). */
+    public static volatile long ownRenderNanos;
 }

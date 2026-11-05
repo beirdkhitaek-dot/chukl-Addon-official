@@ -35,6 +35,7 @@ import net.minecraft.client.render.entity.state.LivingEntityRenderState;
 import net.minecraft.client.render.entity.state.PlayerEntityRenderState;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityPose;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
@@ -115,7 +116,7 @@ public class PlayerModelCs16 extends Module {
 
     private final Setting<Double> attackSpeed = sgAnim.add(new DoubleSetting.Builder()
         .name("attack-speed").description("Speed of the attack animation (Minecraft swings are quick, so this is above 1).")
-        .defaultValue(2.0).min(0.5).max(5.0).sliderMin(1).sliderMax(4).build());
+        .defaultValue(3.0).min(0.5).max(6.0).sliderMin(1).sliderMax(5).build());
 
     private final Setting<Boolean> deathAnimation = sgAnim.add(new BoolSetting.Builder()
         .name("death-animation").description("Play a Counter-Strike death animation when a player dies.")
@@ -158,6 +159,7 @@ public class PlayerModelCs16 extends Module {
         Texture texture;
         float[][] ref;
         int rightHand = -2, leftHand = -2;
+        int head = -2, pelvis = -2, lThigh = -2, lCalf = -2, rThigh = -2, rCalf = -2;
         Identifier texId;
         final Map<String, Integer> seq = new HashMap<>();
         Slot(String key) { this.key = key; }
@@ -178,6 +180,7 @@ public class PlayerModelCs16 extends Module {
         float shootT = -1;
         float prevSwing;
         float deathT;
+        float swimLean;
     }
 
     private final Map<String, Slot> slots = new ConcurrentHashMap<>();
@@ -542,6 +545,8 @@ public class PlayerModelCs16 extends Module {
 
         boolean crouch = ps.isInSneakingPose || ps.sneaking;
         boolean dead = deathAnimation.get() && (ps.deathTime > 0 || pe.isDead());
+        boolean sitting = pe.hasVehicle();
+        boolean swimPose = ps.isSwimming || ps.pose == EntityPose.SWIMMING;
         boolean air = !pe.isOnGround() && !ps.touchingWater && !pe.isClimbing() && !ps.isGliding;
         st.airT = air ? st.airT + dt : 0f;
         boolean moving = st.speed > 0.3f;
@@ -552,7 +557,9 @@ public class PlayerModelCs16 extends Module {
         if (dead) {
             gait = crouch && slot.seq("crouch_die") >= 0 ? "crouch_die" : "death" + (1 + Math.floorMod(ps.id, 3));
             gaitLoop = false;
-        } else if (ps.touchingWater || ps.isSwimming) gait = moving ? "swim" : "treadwater";
+        } else if (sitting) gait = "idle1";
+        else if (swimPose) gait = "swim";
+        else if (ps.touchingWater) gait = "treadwater";
         else if (air) gait = st.speed > 5f ? "longjump" : "jump";
         else if (moving) gait = crouch ? "crouchrun" : (pe.isSprinting() || st.speed > 4.9f ? "run" : "walk");
         else gait = crouch ? "crouch_idle" : "idle1";
@@ -582,6 +589,7 @@ public class PlayerModelCs16 extends Module {
                 float unitsPerSecond = st.speed / scale; // how fast the player really moves, in model units
                 rate = gfps * Math.max(0.25f, Math.min(3f, unitsPerSecond / ground));
             }
+            if (swimPose && !moving) rate *= 0.35f;
             st.gaitPhase += dt * rate;
             gframe = st.gaitPhase;
         }
@@ -623,7 +631,80 @@ public class PlayerModelCs16 extends Module {
         float lo = us != null && us.blendEnd != us.blendStart ? us.blendStart : -90f;
         float hi = us != null && us.blendEnd != us.blendStart ? us.blendEnd : 90f;
         float blend = (pitch - lo) / (hi - lo);
-        return m.poseCs(upper, uframe, uwrap, blend, gi, gframe, gaitLoop);
+        float[][] result = swimPose
+            ? m.poseCs(-1, 0, false, 0.5f, gi, gframe, gaitLoop)
+            : m.poseCs(upper, uframe, uwrap, blend, gi, gframe, gaitLoop);
+        postPose(slot, st, ps, result, swimPose, sitting, dt);
+        return result;
+    }
+
+    private static int boneNamed(MdlModel m, String lower) {
+        for (int i = 0; i < m.bones.length; i++) {
+            String n = m.bones[i].name;
+            if (n != null && n.trim().toLowerCase(Locale.ROOT).equals(lower)) return i;
+        }
+        return -1;
+    }
+
+    /**
+     * Rotates a bone and everything under it around the origin of {@code pivot}. axis 0 turns around the vertical axis
+     * (positive = to the left), axis 1 tilts forward/down around the left axis (positive = the front goes down).
+     */
+    private static void rotateBranch(MdlModel m, float[][] pose, int root, int pivot, int axis, float deg) {
+        if (root < 0 || pivot < 0 || Math.abs(deg) < 0.01f) return;
+        float px = pose[pivot][3], py = pose[pivot][7], pz = pose[pivot][11];
+        double r = Math.toRadians(deg);
+        float c = (float) Math.cos(r), sn = (float) Math.sin(r);
+        float[] R = axis == 0
+            ? new float[]{c, -sn, 0, sn, c, 0, 0, 0, 1}
+            : new float[]{c, 0, sn, 0, 1, 0, -sn, 0, c};
+        for (int b = 0; b < m.bones.length; b++) {
+            boolean in = false;
+            for (int a = b; a >= 0 && !in; a = m.bones[a].parent) { if (a == root) in = true; if (m.bones[a].parent == a) break; }
+            if (!in) continue;
+            float[] M = pose[b];
+            float[] o = new float[12];
+            for (int row = 0; row < 3; row++) {
+                for (int col = 0; col < 3; col++) o[row * 4 + col] = R[row * 3] * M[col] + R[row * 3 + 1] * M[4 + col] + R[row * 3 + 2] * M[8 + col];
+            }
+            float tx = M[3] - px, ty = M[7] - py, tz = M[11] - pz;
+            o[3] = R[0] * tx + R[1] * ty + R[2] * tz + px;
+            o[7] = R[3] * tx + R[4] * ty + R[5] * tz + py;
+            o[11] = R[6] * tx + R[7] * ty + R[8] * tz + pz;
+            System.arraycopy(o, 0, M, 0, 12);
+        }
+    }
+
+    /** Sitting legs, swimming tilt and the head following where the player looks. */
+    private void postPose(Slot slot, State st, PlayerEntityRenderState ps, float[][] pose, boolean swimPose, boolean sitting, float dt) {
+        MdlModel m = slot.model;
+        if (slot.head == -2) {
+            slot.head = boneNamed(m, "bip01 head");
+            slot.pelvis = boneNamed(m, "bip01 pelvis");
+            slot.lThigh = boneNamed(m, "bip01 l thigh");
+            slot.lCalf = boneNamed(m, "bip01 l calf");
+            slot.rThigh = boneNamed(m, "bip01 r thigh");
+            slot.rCalf = boneNamed(m, "bip01 r calf");
+        }
+        float pitch = Math.max(-90f, Math.min(90f, ps.pitch)) * (invertPitch.get() ? -1f : 1f);
+        if (sitting) {
+            // Counter-Strike has no sitting animation: thighs forward, shins down
+            rotateBranch(m, pose, slot.lThigh, slot.lThigh, 1, -85f);
+            rotateBranch(m, pose, slot.lCalf, slot.lCalf, 1, 80f);
+            rotateBranch(m, pose, slot.rThigh, slot.rThigh, 1, -85f);
+            rotateBranch(m, pose, slot.rCalf, slot.rCalf, 1, 80f);
+        }
+        if (swimPose) {
+            // the swim animation lies flat; tilt it up and down with the look direction
+            float target = Math.max(-80f, Math.min(80f, pitch));
+            st.swimLean += (target - st.swimLean) * Math.min(1f, dt * 8f);
+            rotateBranch(m, pose, 0, slot.pelvis >= 0 ? slot.pelvis : 0, 1, st.swimLean);
+        } else {
+            st.swimLean = 0f;
+            float yaw = Math.max(-75f, Math.min(75f, ps.relativeHeadYaw));
+            rotateBranch(m, pose, slot.head, slot.head, 0, -yaw * 0.9f);
+            rotateBranch(m, pose, slot.head, slot.head, 1, pitch * 0.3f);
+        }
     }
 
     private int firstSeq(Slot slot, String... names) {
