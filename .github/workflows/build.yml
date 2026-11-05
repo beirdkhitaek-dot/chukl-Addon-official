@@ -23,6 +23,15 @@ jobs:
       - name: Build
         run: gradle build --no-daemon
 
+      - name: Inspect signatures
+        run: |
+          J=$(find ~/.gradle -name "*.jar" -size +8M ! -name "*sources*" 2>/dev/null | xargs -I{} sh -c 'javap -p -cp {} net.minecraft.client.render.entity.LivingEntityRenderer >/dev/null 2>&1 && echo {}' | head -1)
+          echo "JAR: $J"
+          for C in net.minecraft.client.render.command.RenderCommandQueue 'net.minecraft.client.render.command.RenderCommandQueue$Custom' net.minecraft.client.render.command.OrderedRenderCommandQueueImpl net.minecraft.client.render.VertexConsumer net.minecraft.client.util.math.MatrixStack\$Entry net.minecraft.client.render.RenderLayer net.minecraft.client.render.OverlayTexture net.minecraft.client.render.entity.state.PlayerEntityRenderState net.minecraft.client.render.entity.state.LivingEntityRenderState net.minecraft.client.render.command.ModelCommandRenderer net.minecraft.client.render.command.CustomCommandRenderer; do
+            echo "--- $C"; javap -p -cp "$J" "$C" 2>&1 | head -80
+          done
+          echo "--- RenderLayer entity statics"; javap -p -cp "$J" net.minecraft.client.render.RenderLayer 2>&1 | grep -i -E "entity|static" | head -40
+
       - name: Upload jar
         uses: actions/upload-artifact@v4
         with:
