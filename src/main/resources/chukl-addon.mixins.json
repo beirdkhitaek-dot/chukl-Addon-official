@@ -7,6 +7,7 @@
     "CameraMixin",
     "ClientPlayerEntityMixin",
     "EntityMixin",
+    "HeldItemFeatureRendererMixin",
     "HeldItemHideMixin",
     "InGameHudMixin",
     "InputAccessor",

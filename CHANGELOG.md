@@ -3,6 +3,17 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.42.1 - CS16 Player Model: Items In Hand
+**What's new**
+- **Held items now sit in the CS model's hand** and follow its animation (walk, run, attack, crouch), for both hands. Before, they stayed at the invisible vanilla arm.
+- New settings in CS16 Player Model > Animation: items-in-hand, item-scale, item-offset-side, item-offset-up, item-offset-forward (to fine-tune the grip).
+- The CS16 Knife still attaches p_knife to the hand as before.
+- Not tested in-game yet. If an item points the wrong way, send a screenshot.
+
+**How to use**
+- Enable CS16 Player Model and hold any item. Use the item offset settings if it sits a bit off the hand.
+- Replace the old jar with `chukl-addon-1.42.1.jar`.
+
 ## v1.42.0 - CS16 Player Model
 **What's new**
 - **New module: CS16 Player Model** (Visual category). Players are drawn as Counter-Strike 1.6 player models (.mdl) that you import, with real textures, lighting and the vanilla name tag.

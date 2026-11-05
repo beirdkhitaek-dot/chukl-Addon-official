@@ -24,6 +24,10 @@ import meteordevelopment.meteorclient.settings.StringSetting;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.render.OverlayTexture;
+import net.minecraft.client.render.item.ItemRenderState;
+import net.minecraft.util.math.RotationAxis;
+import org.joml.Matrix3f;
+import org.joml.Quaternionf;
 import net.minecraft.client.render.RenderLayers;
 import net.minecraft.client.render.command.OrderedRenderCommandQueue;
 import net.minecraft.client.render.entity.state.BipedEntityRenderState;
@@ -125,6 +129,26 @@ public class PlayerModelCs16 extends Module {
         .name("facing-offset").description("Turns the model around its vertical axis, in degrees, if a model faces the wrong way.")
         .defaultValue(0.0).min(-180).max(180).sliderMin(-180).sliderMax(180).build());
 
+    private final Setting<Boolean> handItems = sgAnim.add(new BoolSetting.Builder()
+        .name("items-in-hand").description("Draw held items in the CS model's hand and make them follow its animation.")
+        .defaultValue(true).build());
+
+    private final Setting<Double> itemScale = sgAnim.add(new DoubleSetting.Builder()
+        .name("item-scale").description("Size of held items in the CS hand.")
+        .defaultValue(1.0).min(0.3).max(2.5).sliderMin(0.5).sliderMax(1.5).build());
+
+    private final Setting<Double> itemSide = sgAnim.add(new DoubleSetting.Builder()
+        .name("item-offset-side").description("Move held items sideways in the hand (blocks).")
+        .defaultValue(0.0).min(-0.5).max(0.5).sliderMin(-0.3).sliderMax(0.3).build());
+
+    private final Setting<Double> itemUp = sgAnim.add(new DoubleSetting.Builder()
+        .name("item-offset-up").description("Move held items along the arm (blocks, positive = toward the shoulder).")
+        .defaultValue(0.0).min(-0.5).max(0.5).sliderMin(-0.3).sliderMax(0.3).build());
+
+    private final Setting<Double> itemForward = sgAnim.add(new DoubleSetting.Builder()
+        .name("item-offset-forward").description("Move held items forward from the hand (blocks).")
+        .defaultValue(0.0).min(-0.5).max(0.5).sliderMin(-0.3).sliderMax(0.3).build());
+
     // ---- model slots
     private static final class Slot {
         final String key;
@@ -132,6 +156,8 @@ public class PlayerModelCs16 extends Module {
         volatile MdlAtlas atlas;
         volatile boolean failed;
         Texture texture;
+        float[][] ref;
+        int rightHand = -2, leftHand = -2;
         Identifier texId;
         final Map<String, Integer> seq = new HashMap<>();
         Slot(String key) { this.key = key; }
@@ -157,6 +183,7 @@ public class PlayerModelCs16 extends Module {
     private final Map<String, Slot> slots = new ConcurrentHashMap<>();
     private final Map<Integer, State> states = new HashMap<>();
     private final Map<Integer, Cs16Hooks.Rig> rigs = new HashMap<>();
+    private final Set<ItemRenderState> handled = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
     private ExecutorService executor;
     private int idCounter = 0;
     private int frameCounter = 0;
@@ -439,6 +466,63 @@ public class PlayerModelCs16 extends Module {
                 }
             }
         });
+
+        if (handItems.get()) {
+            if (slot.ref == null) slot.ref = slot.model.poseCs(-1, 0, false, 0.5f, firstSeq(slot, "idle1", "idle"), 0, false);
+            if (slot.rightHand == -2) slot.rightHand = findBone(slot.model, "r");
+            if (slot.leftHand == -2) slot.leftHand = findBone(slot.model, "l");
+            drawHand(slot, ps, pose, true, matrices, queue, fx, fz, lx, lz, scale);
+            drawHand(slot, ps, pose, false, matrices, queue, fx, fz, lx, lz, scale);
+        }
+    }
+
+    private static int findBone(MdlModel m, String side) {
+        int best = -1;
+        for (int i = 0; i < m.bones.length; i++) {
+            String n = m.bones[i].name == null ? "" : m.bones[i].name.toLowerCase(Locale.ROOT).trim();
+            if (n.equals("bip01 " + side + " hand")) return i;
+            if (n.endsWith(side + " hand") && best < 0) best = i;
+        }
+        return best;
+    }
+
+    /** True once if this item state was drawn in the CS hand, so the vanilla hand renderer skips it. */
+    public static boolean takeHandled(ItemRenderState st) {
+        PlayerModelCs16 m = INSTANCE;
+        return m != null && m.handled.remove(st);
+    }
+
+    /**
+     * Draws the held item at the CS hand. The item keeps vanilla's own hold (grip, tilt), but the arm frame it hangs from
+     * is the hand bone's movement since the idle pose, so it follows every animation.
+     */
+    private void drawHand(Slot slot, PlayerEntityRenderState ps, float[][] pose, boolean right, MatrixStack matrices,
+                          OrderedRenderCommandQueue queue, float fx, float fz, float lx, float lz, float scale) {
+        ItemRenderState is = right ? ps.rightHandItemState : ps.leftHandItemState;
+        if (is == null || is.isEmpty()) return;
+        int hb = right ? slot.rightHand : slot.leftHand;
+        if (hb < 0 || hb >= pose.length || hb >= slot.ref.length) return;
+        float[] d = com.chukl.addon.cs16.MdlWorldMesh.mul(pose[hb], com.chukl.addon.cs16.MdlWorldMesh.invert(slot.ref[hb]));
+        float[] c0 = {d[1], d[5], d[9]}, c1 = {-d[2], -d[6], -d[10]}, c2 = {-d[0], -d[4], -d[8]};
+        Matrix3f rot = new Matrix3f(
+            fx * c0[0] + lx * c0[1], c0[2], fz * c0[0] + lz * c0[1],
+            fx * c1[0] + lx * c1[1], c1[2], fz * c1[0] + lz * c1[1],
+            fx * c2[0] + lx * c2[1], c2[2], fz * c2[0] + lz * c2[1]);
+        Quaternionf q = new Quaternionf().setFromNormalized(rot);
+        float tx = pose[hb][3], ty = pose[hb][7], tz = pose[hb][11];
+        float side = right ? 1f : -1f;
+        matrices.push();
+        matrices.translate(scale * (fx * tx + lx * ty), scale * (tz + FOOT), scale * (fz * tx + lz * ty));
+        matrices.multiply(q);
+        matrices.translate(side / 16f + itemSide.get().floatValue() * side, -0.625f + itemUp.get().floatValue(), 0.125f + itemForward.get().floatValue());
+        float sc = itemScale.get().floatValue();
+        matrices.scale(sc, sc, sc);
+        matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(-90f));
+        matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(180f));
+        matrices.translate(side / 16f, 0.125f, -0.625f);
+        is.render(matrices, queue, ps.light, OverlayTexture.DEFAULT_UV, 0);
+        matrices.pop();
+        handled.add(is);
     }
 
     // ------------------------------------------------------------------ Counter-Strike animation logic
