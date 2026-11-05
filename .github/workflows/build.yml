@@ -23,6 +23,16 @@ jobs:
       - name: Build
         run: gradle build --no-daemon
 
+      - name: Inspect signatures
+        run: |
+          J=$(find ~/.gradle -name "*.jar" -size +8M ! -name "*sources*" 2>/dev/null | xargs -I{} sh -c 'javap -p -cp {} net.minecraft.client.render.entity.LivingEntityRenderer >/dev/null 2>&1 && echo {}' | head -1)
+          for C in 'net.minecraft.client.render.command.OrderedRenderCommandQueue$Custom' 'net.minecraft.client.render.command.OrderedRenderCommandQueue$LayeredCustom' net.minecraft.client.render.RenderLayers net.minecraft.client.render.entity.state.BipedEntityRenderState net.minecraft.client.render.VertexConsumerProvider; do
+            echo "--- $C"; javap -p -cp "$J" "$C" 2>&1 | head -90
+          done
+          echo "--- who has entityCutoutNoCull"; unzip -l "$J" | awk '{print $4}' | grep -E "net/minecraft/client/render/(RenderLayers|RenderTypes|RenderLayer)" | head
+          echo "--- TextureManager"; javap -p -cp "$J" net.minecraft.client.texture.TextureManager 2>&1 | grep -i register
+          echo "--- LightmapTextureManager"; javap -p -cp "$J" net.minecraft.client.render.LightmapTextureManager 2>&1 | grep -E "static" | head
+
       - name: Upload jar
         uses: actions/upload-artifact@v4
         with:
