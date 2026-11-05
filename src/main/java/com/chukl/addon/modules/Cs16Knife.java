@@ -1,11 +1,14 @@
 package com.chukl.addon.modules;
 
 import com.chukl.addon.ChuklAddon;
+import com.chukl.addon.cs16.Cs16Hooks;
 import com.chukl.addon.cs16.MdlModel;
 import com.chukl.addon.cs16.MdlRasterizer;
+import com.chukl.addon.cs16.MdlWorldMesh;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.TextureFormat;
 import meteordevelopment.meteorclient.events.render.Render2DEvent;
+import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.gui.GuiTheme;
 import meteordevelopment.meteorclient.gui.widgets.WLabel;
@@ -21,9 +24,16 @@ import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.StringSetting;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.RenderPipelines;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.util.Arm;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.tag.ItemTags;
 import net.minecraft.util.Identifier;
@@ -46,12 +56,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * CS16 Knife: replaces the sword you hold (first person) with a Counter-Strike 1.6 knife view model.
  * Skins are GoldSrc .mdl view models that you import yourself (meteor-client/chukl-visual/cs16-knives/).
  * The model is drawn by a small software renderer on a background thread and shown as a screen overlay,
- * with the knife's own draw / idle / slash / stab animations.
+ * with the knife's own draw / idle / slash / stab animations. It is drawn behind the HUD (a mixin into the in-game HUD,
+ * with a fallback to the normal overlay event). In third person and on other players the p_knife (or w_knife) model
+ * is drawn in the world, attached to the hand; when a Player Model module is active it attaches to that model instead.
  */
 public class Cs16Knife extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgView = settings.createGroup("View");
     private final SettingGroup sgPerf = settings.createGroup("Performance");
+    private final SettingGroup sgWorld = settings.createGroup("Third Person");
 
     private final Setting<String> skin = sgGeneral.add(new StringSetting.Builder()
         .name("skin")
@@ -66,8 +79,8 @@ public class Cs16Knife extends Module {
 
     private final Setting<Boolean> includeAxes = sgGeneral.add(new BoolSetting.Builder()
         .name("include-axes")
-        .description("Also replace axes, not only swords.")
-        .defaultValue(false).build());
+        .description("Also replace axes. Swords use the primary attack (slash), axes use the secondary attack (stab), like Counter-Strike.")
+        .defaultValue(true).build());
 
     private final Setting<Boolean> leftHanded = sgGeneral.add(new BoolSetting.Builder()
         .name("left-handed")
@@ -110,13 +123,68 @@ public class Cs16Knife extends Module {
         .description("How many times per second the knife image is redrawn.")
         .defaultValue(30).min(10).max(60).sliderMin(15).sliderMax(60).build());
 
+
+    private final Setting<Boolean> thirdPerson = sgWorld.add(new BoolSetting.Builder()
+        .name("third-person").description("Draw the knife in your hand when you look at yourself in third person.")
+        .defaultValue(true).build());
+
+    private final Setting<Boolean> otherPlayers = sgWorld.add(new BoolSetting.Builder()
+        .name("other-players").description("Draw the knife in the hand of other players who hold a sword or axe.")
+        .defaultValue(true).build());
+
+    private final Setting<String> worldModel = sgWorld.add(new StringSetting.Builder()
+        .name("world-model")
+        .description("Model for third person and other players (p_knife.mdl, w_knife.mdl or any knife .mdl) in the cs16-knives folder. Empty = automatic: p_<skin>, then p_knife, then w_knife.")
+        .defaultValue("").build());
+
+    private final Setting<Double> worldScale = sgWorld.add(new DoubleSetting.Builder()
+        .name("world-scale").description("Size of the knife in blocks per model unit. Counter-Strike's own size is about 0.025.")
+        .defaultValue(0.035).min(0.01).max(0.2).sliderMin(0.02).sliderMax(0.08).build());
+
+    private final Setting<Double> worldBrightness = sgWorld.add(new DoubleSetting.Builder()
+        .name("world-brightness").description("Brightness of the knife in the world.")
+        .defaultValue(1.3).min(0.5).max(2.5).sliderMin(0.6).sliderMax(2.0).build());
+
+    private final Setting<Double> worldForward = sgWorld.add(new DoubleSetting.Builder()
+        .name("world-offset-forward").description("Move the knife forward (blocks).")
+        .defaultValue(0.0).min(-1).max(1).sliderMin(-0.5).sliderMax(0.5).build());
+
+    private final Setting<Double> worldRight = sgWorld.add(new DoubleSetting.Builder()
+        .name("world-offset-right").description("Move the knife to the side of the holding hand (blocks).")
+        .defaultValue(0.0).min(-1).max(1).sliderMin(-0.5).sliderMax(0.5).build());
+
+    private final Setting<Double> worldUp = sgWorld.add(new DoubleSetting.Builder()
+        .name("world-offset-up").description("Move the knife up (blocks).")
+        .defaultValue(0.0).min(-1).max(1).sliderMin(-0.5).sliderMax(0.5).build());
+
+    private final Setting<Double> worldPitch = sgWorld.add(new DoubleSetting.Builder()
+        .name("world-pitch").description("Tilt the knife up (positive) or down (negative), in degrees.")
+        .defaultValue(0.0).min(-90).max(90).sliderMin(-45).sliderMax(45).build());
+
+    private final Setting<Boolean> worldSwing = sgWorld.add(new BoolSetting.Builder()
+        .name("world-swing").description("Swing the knife when the player attacks.")
+        .defaultValue(true).build());
+
+    private final Setting<Integer> worldDistance = sgWorld.add(new IntSetting.Builder()
+        .name("world-distance").description("Players farther than this many blocks keep the vanilla item.")
+        .defaultValue(48).min(8).max(128).sliderMin(16).sliderMax(96).build());
+
     // ---- loaded model state
     private volatile MdlModel model;
     private volatile String loadedName = null;
     private volatile String loadError = null;
     private volatile boolean loading = false;
     private int idleSeq = -1, drawSeq = -1;
-    private int[] hitSeqs = new int[0], missSeqs = new int[0];
+    // Counter-Strike: attack 1 (primary) = slash, attack 2 (secondary) = stab. Swords use attack 1, axes attack 2.
+    private int[] slashHit = new int[0], slashMiss = new int[0], stabHit = new int[0], stabMiss = new int[0];
+
+    // ---- world (third person / other players) model
+    private volatile MdlWorldMesh wmesh;
+    private volatile MdlModel wmodel;
+    private volatile float[][] wpose;
+    private volatile int wHandBone = -1;
+    private final Color tmpColor = new Color(255, 255, 255, 255);
+    private volatile long hudHookNanos = 0;
 
     // ---- animation state (main thread)
     private int curSeq = -1;
@@ -165,7 +233,9 @@ public class Cs16Knife extends Module {
             if (files == null) continue;
             java.util.Arrays.sort(files);
             for (File x : files) {
-                if (x.isFile() && x.getName().toLowerCase(Locale.ROOT).endsWith(".mdl")) names.add(x.getName());
+                String ln = x.getName().toLowerCase(Locale.ROOT);
+                // p_ and w_ models are the third-person/world versions, not view models
+                if (x.isFile() && ln.endsWith(".mdl") && !ln.startsWith("p_") && !ln.startsWith("w_")) names.add(x.getName());
             }
         }
         return new ArrayList<>(names);
@@ -219,6 +289,8 @@ public class Cs16Knife extends Module {
         executor = null;
         freeTexture();
         model = null;
+        wmesh = null;
+        wmodel = null;
         loadedName = null;
     }
 
@@ -251,6 +323,7 @@ public class Cs16Knife extends Module {
             try {
                 MdlModel m = MdlModel.load(f.toPath());
                 classify(m);
+                loadWorldModel(f.getName());
                 model = m;
                 loadError = null;
                 curSeq = -1;
@@ -269,7 +342,7 @@ public class Cs16Knife extends Module {
 
     private void classify(MdlModel m) {
         int idle = -1, draw = -1;
-        List<Integer> hit = new ArrayList<>(), miss = new ArrayList<>(), any = new ArrayList<>();
+        List<Integer> sh = new ArrayList<>(), sm = new ArrayList<>(), th = new ArrayList<>(), tm = new ArrayList<>(), any = new ArrayList<>();
         for (int i = 0; i < m.seqs.length; i++) {
             MdlModel.Seq s = m.seqs[i];
             if (!s.usable()) continue;
@@ -280,8 +353,14 @@ public class Cs16Knife extends Module {
             if (s.numFrames < 6) continue;
             any.add(i);
             boolean missy = l.contains("miss") || l.contains("fail");
-            if (l.contains("midslash") || (l.contains("stab") && !missy)) hit.add(i);
-            else if (l.contains("slash") || l.contains("stab") || l.contains("attack")) miss.add(i);
+            if (l.contains("stab")) {
+                // attack 2: stab (hit) and stab_miss
+                (missy ? tm : th).add(i);
+            } else if (l.contains("midslash")) {
+                sh.add(i); // attack 1 that hits
+            } else if (l.contains("slash") || l.contains("attack")) {
+                sm.add(i); // attack 1 that misses
+            }
         }
         if (idle < 0) {
             for (int i = 0; i < m.seqs.length; i++) {
@@ -291,13 +370,59 @@ public class Cs16Knife extends Module {
         if (idle < 0) {
             for (int i = 0; i < m.seqs.length; i++) if (m.seqs[i].usable()) { idle = i; break; }
         }
-        if (hit.isEmpty()) hit = new ArrayList<>(miss);
-        if (miss.isEmpty()) miss = new ArrayList<>(hit);
-        if (hit.isEmpty()) { hit = new ArrayList<>(any); miss = new ArrayList<>(any); }
+        // a model without one of the four swings borrows the nearest one
+        if (sh.isEmpty()) sh = new ArrayList<>(sm);
+        if (sm.isEmpty()) sm = new ArrayList<>(sh);
+        if (th.isEmpty()) th = new ArrayList<>(tm);
+        if (tm.isEmpty()) tm = new ArrayList<>(th);
+        if (sh.isEmpty() && sm.isEmpty()) { sh = new ArrayList<>(th); sm = new ArrayList<>(tm); }
+        if (th.isEmpty() && tm.isEmpty()) { th = new ArrayList<>(sh); tm = new ArrayList<>(sm); }
+        if (sh.isEmpty() && sm.isEmpty()) { sh = new ArrayList<>(any); sm = new ArrayList<>(any); th = new ArrayList<>(any); tm = new ArrayList<>(any); }
         idleSeq = idle;
         drawSeq = draw;
-        hitSeqs = hit.stream().mapToInt(Integer::intValue).toArray();
-        missSeqs = miss.stream().mapToInt(Integer::intValue).toArray();
+        slashHit = sh.stream().mapToInt(Integer::intValue).toArray();
+        slashMiss = sm.stream().mapToInt(Integer::intValue).toArray();
+        stabHit = th.stream().mapToInt(Integer::intValue).toArray();
+        stabMiss = tm.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    /** Loads the p_/w_ model used in third person and on other players, and bakes it for drawing in the world. */
+    private void loadWorldModel(String viewName) {
+        wmesh = null;
+        wmodel = null;
+        List<String> tries = new ArrayList<>();
+        String forced = worldModel.get().trim();
+        if (!forced.isEmpty()) tries.add(forced);
+        else {
+            String base = viewName.toLowerCase(Locale.ROOT).replaceFirst("\\.mdl$", "").replaceFirst("^v_", "");
+            tries.add("p_" + base);
+            tries.add("p_knife");
+            tries.add("w_knife");
+        }
+        for (String t : tries) {
+            File f = findSkin(t);
+            if (f == null) continue;
+            try {
+                MdlModel pm = MdlModel.load(f.toPath());
+                float[][] pose = pm.pose(0, 0f, true);
+                MdlWorldMesh mesh = MdlWorldMesh.bake(pm, pose, 500);
+                if (mesh.count == 0) continue;
+                int hand = -1;
+                for (int i = 0; i < pm.bones.length; i++) {
+                    String bn = pm.bones[i].name == null ? "" : pm.bones[i].name.toLowerCase(Locale.ROOT);
+                    if (bn.contains("r hand") && !bn.contains("finger")) { hand = i; break; }
+                }
+                wpose = pose;
+                wHandBone = hand;
+                wmodel = pm;
+                wmesh = mesh;
+                info("Third person model: " + f.getName() + " (" + mesh.count + " triangles).");
+                return;
+            } catch (Throwable ex) {
+                warning("Could not load " + f.getName() + ": " + ex.getMessage());
+            }
+        }
+        info("No p_knife / w_knife model found next to your knife skins, so third person keeps the vanilla item.");
     }
 
     // ------------------------------------------------------------------ hooks
@@ -349,15 +474,32 @@ public class Cs16Knife extends Module {
 
     private void startAttack() {
         boolean hit = hitAnimations.get() && mc.crosshairTarget != null && mc.crosshairTarget.getType() == HitResult.Type.ENTITY;
-        int[] list = hit ? hitSeqs : missSeqs;
-        if (list.length == 0) list = hit ? missSeqs : hitSeqs;
+        boolean axe = mc.player.getMainHandStack().isIn(ItemTags.AXES);
+        // Counter-Strike: attack 1 = slash (swords), attack 2 = stab (axes)
+        int[] list = axe ? (hit ? stabHit : stabMiss) : (hit ? slashHit : slashMiss);
+        if (list.length == 0) list = axe ? (hit ? stabMiss : stabHit) : (hit ? slashMiss : slashHit);
+        if (list.length == 0) list = axe ? slashMiss : stabMiss;
         if (list.length == 0) return;
         int seq = list[attackCounter++ % list.length];
         play(seq, false);
     }
 
+    /** Called from the in-game HUD mixin before the HUD is drawn, so the knife ends up behind it. */
+    public static void drawBehindHud(DrawContext context) {
+        Cs16Knife k = INSTANCE;
+        if (k == null || !k.isActive()) return;
+        k.hudHookNanos = System.nanoTime();
+        k.drawKnife(context);
+    }
+
+    /** Fallback: if the HUD hook never runs (a different game version), draw on top of the HUD like before. */
     @EventHandler
     private void onRender2D(Render2DEvent event) {
+        if (System.nanoTime() - hudHookNanos < 500_000_000L) return;
+        drawKnife(event.drawContext);
+    }
+
+    private void drawKnife(DrawContext ctx) {
         MdlModel m = model;
         if (m == null || executor == null || mc.player == null || mc.world == null) return;
         if (mc.currentScreen != null || mc.options.hudHidden) return;
@@ -421,7 +563,7 @@ public class Cs16Knife extends Module {
 
         if (textureId != null) {
             int sw = mc.getWindow().getScaledWidth(), sh = mc.getWindow().getScaledHeight();
-            event.drawContext.drawTexture(RenderPipelines.GUI_TEXTURED, textureId, 0, 0, 0f, 0f, sw, sh, texW, texH, texW, texH, 0xFFFFFFFF);
+            ctx.drawTexture(RenderPipelines.GUI_TEXTURED, textureId, 0, 0, 0f, 0f, sw, sh, texW, texH, texW, texH, 0xFFFFFFFF);
         }
     }
 
@@ -454,6 +596,116 @@ public class Cs16Knife extends Module {
         for (int p : argb) ib.put((p & 0xFF00FF00) | ((p << 16) & 0x00FF0000) | ((p >> 16) & 0xFF));
         bb.rewind();
         texture.upload(bb);
+    }
+
+    // ------------------------------------------------------------------ third person and other players
+
+    /** True when this player's hand gets the world knife (shared by the drawing and the vanilla-item hiding). */
+    private boolean worldTarget(LivingEntity e) {
+        if (!(e instanceof PlayerEntity p) || mc.player == null || wmesh == null || model == null) return false;
+        if (p == mc.player) {
+            if (!thirdPerson.get() || mc.options.getPerspective().isFirstPerson()) return false;
+        } else if (!otherPlayers.get()) return false;
+        if (p.isSpectator()) return false;
+        double d = worldDistance.get();
+        if (mc.player.squaredDistanceTo(p) > d * d) return false;
+        return isReplaceable(p.getMainHandStack());
+    }
+
+    /** Used by the render-state mixin: true when the vanilla item in this player's main hand should not be drawn. */
+    public static boolean shouldHideWorld(LivingEntity e) {
+        Cs16Knife k = INSTANCE;
+        return k != null && k.isActive() && k.worldTarget(e);
+    }
+
+    @EventHandler
+    private void onRender3D(Render3DEvent event) {
+        MdlWorldMesh w = wmesh;
+        if (w == null || mc.world == null || mc.player == null) return;
+        int drawn = 0;
+        for (PlayerEntity p : mc.world.getPlayers()) {
+            if (!worldTarget(p)) continue;
+            drawWorldKnife(event, w, p, event.tickDelta);
+            if (++drawn >= 24) break; // keeps crowded servers smooth
+        }
+    }
+
+    private void drawWorldKnife(Render3DEvent e, MdlWorldMesh w, PlayerEntity p, float td) {
+        float bright = worldBrightness.get().floatValue();
+        double scale = worldScale.get();
+        double ox, oy, oz;
+        double[] F = new double[3], L = new double[3], U = new double[3];
+        float[] skin = null;
+        float gx = 0, gy = 0, gz = 0;
+
+        Cs16Hooks.RigProvider rp = Cs16Hooks.rigProvider;
+        Cs16Hooks.Rig rig = rp == null ? null : rp.rigFor(p, td);
+        if (rig != null && rig.model != null && rig.pose != null && wHandBone >= 0) {
+            // A player model is drawn: the knife follows that model's right hand, like Counter-Strike's p_knife
+            int hb = -1;
+            for (int i = 0; i < rig.model.bones.length; i++) {
+                String bn = rig.model.bones[i].name;
+                if (bn != null && bn.equalsIgnoreCase(wmodel.bones[wHandBone].name)) { hb = i; break; }
+            }
+            if (hb >= 0) {
+                skin = MdlWorldMesh.mul(rig.pose[hb], MdlWorldMesh.invert(wpose[wHandBone]));
+                double yaw = Math.toRadians(rig.yawDegrees);
+                F[0] = -Math.sin(yaw); F[1] = 0; F[2] = Math.cos(yaw);
+                L[0] = Math.cos(yaw); L[1] = 0; L[2] = Math.sin(yaw);
+                U[1] = 1;
+                ox = rig.x; oy = rig.y; oz = rig.z;
+                scale = rig.scale;
+                emitWorld(e, w, skin, ox, oy, oz, F, L, U, scale, 0, 0, 0, bright);
+                return;
+            }
+        }
+
+        // vanilla player model: hold the knife where the vanilla hand holds the item
+        Vec3d pos = p.getLerpedPos(td);
+        double yaw = Math.toRadians(MathHelper.lerpAngleDegrees(td, p.lastBodyYaw, p.bodyYaw));
+        double[] f0 = {-Math.sin(yaw), 0, Math.cos(yaw)};
+        double[] right = {-Math.cos(yaw), 0, -Math.sin(yaw)};
+        double side = p.getMainArm() == Arm.LEFT ? -1 : 1;
+        double hx = pos.x + right[0] * (0.32 + worldRight.get()) * side + f0[0] * (0.30 + worldForward.get());
+        double hz = pos.z + right[2] * (0.32 + worldRight.get()) * side + f0[2] * (0.30 + worldForward.get());
+        double hy = pos.y + (p.isSneaking() ? 0.78 : 0.98) + worldUp.get();
+
+        double tilt = worldPitch.get() - p.getPitch(td) * 0.4;
+        if (worldSwing.get()) {
+            float sw = p.getHandSwingProgress(td);
+            if (sw > 0) tilt -= 70.0 * Math.sin(Math.PI * Math.sqrt(sw));
+        }
+        double th = Math.toRadians(tilt);
+        double c = Math.cos(th), sn = Math.sin(th);
+        F[0] = f0[0] * c; F[1] = sn; F[2] = f0[2] * c;
+        U[0] = -f0[0] * sn; U[1] = c; U[2] = -f0[2] * sn;
+        L[0] = -right[0]; L[1] = 0; L[2] = -right[2];
+        emitWorld(e, w, null, hx, hy, hz, F, L, U, scale, w.gripX, w.gripY, w.gripZ, bright);
+    }
+
+    /** Draws the baked triangles. Model space (x forward, y left, z up) maps to the world through F, L and U. */
+    private void emitWorld(Render3DEvent e, MdlWorldMesh w, float[] skin, double ox, double oy, double oz,
+                           double[] F, double[] L, double[] U, double s, float gx, float gy, float gz, float bright) {
+        double[] pt = new double[9];
+        for (int i = 0; i < w.count; i++) {
+            for (int k = 0; k < 3; k++) {
+                float x = w.pos[i * 9 + k * 3], y = w.pos[i * 9 + k * 3 + 1], z = w.pos[i * 9 + k * 3 + 2];
+                if (skin != null) {
+                    float nx = skin[0] * x + skin[1] * y + skin[2] * z + skin[3];
+                    float ny = skin[4] * x + skin[5] * y + skin[6] * z + skin[7];
+                    float nz = skin[8] * x + skin[9] * y + skin[10] * z + skin[11];
+                    x = nx; y = ny; z = nz;
+                }
+                x -= gx; y -= gy; z -= gz;
+                pt[k * 3] = ox + s * (F[0] * x + L[0] * y + U[0] * z);
+                pt[k * 3 + 1] = oy + s * (F[1] * x + L[1] * y + U[1] * z);
+                pt[k * 3 + 2] = oz + s * (F[2] * x + L[2] * y + U[2] * z);
+            }
+            int col = w.argb[i];
+            tmpColor.set(Math.min(255, (int) (((col >> 16) & 0xFF) * bright)), Math.min(255, (int) (((col >> 8) & 0xFF) * bright)),
+                Math.min(255, (int) ((col & 0xFF) * bright)), 255);
+            e.renderer.quad(pt[0], pt[1], pt[2], pt[3], pt[4], pt[5], pt[6], pt[7], pt[8], pt[6], pt[7], pt[8], tmpColor);
+        }
     }
 
     // ------------------------------------------------------------------ GUI

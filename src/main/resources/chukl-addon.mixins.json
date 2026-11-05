@@ -3,10 +3,12 @@
   "package": "com.chukl.addon.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
+    "ArmedEntityStateMixin",
     "CameraMixin",
     "ClientPlayerEntityMixin",
     "EntityMixin",
     "HeldItemHideMixin",
+    "InGameHudMixin",
     "InputAccessor",
     "KeyboardInputMixin",
     "MouseMixin"

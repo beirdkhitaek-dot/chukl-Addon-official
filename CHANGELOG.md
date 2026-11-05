@@ -3,6 +3,21 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.41.0 - CS16 Knife Third Person, Attack Types And Behind The HUD
+**What's new**
+- **Behind the HUD:** the first-person knife is now drawn before the HUD, so the hotbar, crosshair, health and chat are on top of it instead of the knife covering them.
+- **Attack 1 and attack 2 like Counter-Strike:** swords now use the primary attack (slash, and midslash when your crosshair is on an entity). Axes use the secondary attack (stab, and stab_miss when you miss). `include-axes` is now on by default.
+- **Third person and other players:** the knife is drawn in the hand of your player in third person and in the hand of other players who hold a sword or axe. It uses a **p_knife.mdl** (the third-person knife of Counter-Strike), or **w_knife.mdl** if there is no p_knife, from the same `cs16-knives` folder. The vanilla sword in that hand is hidden; every other item stays vanilla. Without a p_knife or w_knife the vanilla item is left alone.
+- **New Third Person settings:** `third-person`, `other-players`, `world-model`, `world-scale`, `world-brightness`, `world-offset-forward/right/up`, `world-pitch`, `world-swing`, `world-distance`.
+- **Ready for a Player Model module:** when a player model module is active, the knife attaches to that model's right hand bone (the way Counter-Strike attaches p_knife) instead of the vanilla hand. Vanilla items keep working because only a hand holding a sword or axe is replaced.
+- The Previous/Next skin buttons skip p_ and w_ models, so they only cycle view models.
+
+**How to use**
+1. Put your knife models in the `cs16-knives` folder: `v_knife.mdl` (first person) plus `p_knife.mdl` (third person, optional `w_knife.mdl`). Press Refresh in the module.
+2. Turn on **CS16 Knife**. Press F5 to see the knife in your own hand, or look at another player holding a sword.
+3. If the knife looks too small, big, high or low in third person, change `world-scale` and the `world-offset-*` / `world-pitch` settings in the **Third Person** group.
+4. Axes show the stab; swords show the slash. Turn off `include-axes` if you only want swords replaced.
+
 ## v1.40.0 - Seed Finder Structure Analyzer And Solver
 **What's new**
 - **Structure analyzer:** **Seed Finder** now also recognises structures from the blocks of the chunks you load: desert temples, jungle temples, igloos, swamp huts, ocean monuments, pillager outposts, strongholds, ancient cities, trial chambers, mineshafts, villages, nether fortresses, bastions and ruined portals. Each one is written to `meteor-client/chukl-research/structures-<server>.jsonl` (kind, chunk, a block position, block counts). Setting: `analyze-structures` (on by default).
