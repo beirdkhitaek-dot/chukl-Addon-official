@@ -17,7 +17,7 @@ public class ArmedEntityStateMixin {
      * hand is cleared. Only the main hand of a player holding a sword or axe is touched; every other item stays vanilla.
      */
     @Inject(method = "updateRenderState", at = @At("TAIL"))
-    private static void chukl$hideSword(LivingEntity entity, ArmedEntityRenderState state, ItemModelManager itemModelManager, CallbackInfo ci) {
+    private static void chukl$hideSword(LivingEntity entity, ArmedEntityRenderState state, ItemModelManager itemModelManager, float tickProgress, CallbackInfo ci) {
         if (!Cs16Knife.shouldHideWorld(entity)) return;
         if (entity.getMainArm() == Arm.RIGHT) state.rightHandItemState.clear();
         else state.leftHandItemState.clear();

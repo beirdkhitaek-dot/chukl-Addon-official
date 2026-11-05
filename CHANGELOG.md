@@ -3,6 +3,14 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.41.2 - Fix Startup Crash From The Knife Hand Mixin
+**What's new**
+- **Fixed a crash on startup** in v1.41.0 and v1.41.1: the game stopped with "Mixin transformation of net.minecraft.class_10426 failed". The hook that hides the vanilla sword in third person had the wrong method signature for Minecraft 1.21.11 (it was missing the float parameter). It now matches.
+- If you were on 1.41.0 or 1.41.1, update to this version.
+
+**How to use**
+- Nothing to do. Replace the old jar with `chukl-addon-1.41.2.jar`.
+
 ## v1.41.1 - Bundled Knife Models Slot
 **What's new**
 - The addon can now ship default CS16 knife models. Models placed in `assets/chukl-addon/cs16/` inside the jar (`v_knife.mdl`, `p_knife.mdl`, `w_knife.mdl`) are copied to the user's `cs16-knives` folder the first time CS16 Knife runs, only when that folder has no skins yet. This release ships none; it only adds the slot, so your own models are never overwritten.
