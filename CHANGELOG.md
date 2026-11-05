@@ -3,6 +3,13 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.41.1 - Bundled Knife Models Slot
+**What's new**
+- The addon can now ship default CS16 knife models. Models placed in `assets/chukl-addon/cs16/` inside the jar (`v_knife.mdl`, `p_knife.mdl`, `w_knife.mdl`) are copied to the user's `cs16-knives` folder the first time CS16 Knife runs, only when that folder has no skins yet. This release ships none; it only adds the slot, so your own models are never overwritten.
+
+**How to use**
+- Nothing to do as a player. Put your models in `meteor-client/chukl-visual/cs16-knives/` as before.
+
 ## v1.41.0 - CS16 Knife Third Person, Attack Types And Behind The HUD
 **What's new**
 - **Behind the HUD:** the first-person knife is now drawn before the HUD, so the hotbar, crosshair, health and chat are on top of it instead of the knife covering them.

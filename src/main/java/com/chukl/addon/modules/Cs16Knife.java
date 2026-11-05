@@ -279,6 +279,7 @@ public class Cs16Knife extends Module {
         curSeq = -1;
         lastStack = ItemStack.EMPTY;
         wasHolding = false;
+        installBundledDefaults();
         info("Put .mdl knife models in: " + folders().get(0).getAbsolutePath());
         reloadSkin();
     }
@@ -292,6 +293,25 @@ public class Cs16Knife extends Module {
         wmesh = null;
         wmodel = null;
         loadedName = null;
+    }
+
+    /** Copies models bundled inside the addon (assets/chukl-addon/cs16/) to the user's folder, but only when it has no skins yet. */
+    private void installBundledDefaults() {
+        try {
+            if (!listSkins().isEmpty()) return;
+            File dir = folders().get(0);
+            int copied = 0;
+            for (String name : new String[]{"v_knife.mdl", "p_knife.mdl", "w_knife.mdl"}) {
+                try (java.io.InputStream in = Cs16Knife.class.getResourceAsStream("/assets/chukl-addon/cs16/" + name)) {
+                    if (in == null) continue;
+                    java.nio.file.Files.copy(in, new File(dir, name).toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    copied++;
+                }
+            }
+            if (copied > 0) info("Installed " + copied + " bundled knife model(s) to " + dir.getAbsolutePath());
+        } catch (Throwable t) {
+            warning("Could not install the bundled knife models: " + t.getMessage());
+        }
     }
 
     private void freeTexture() {
