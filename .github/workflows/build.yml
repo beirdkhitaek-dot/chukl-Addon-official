@@ -25,7 +25,7 @@ jobs:
 
       - name: Inspect signatures
         run: |
-          JAR=$(find ~/.gradle /home/runner/work -name "minecraft-*.jar" ! -name "*sources*" 2>/dev/null | grep -i -E "merged|client|mapped|yarn" | head -5)
+          JAR=$(find ~/.gradle -name "*.jar" -size +8M ! -name "*sources*" 2>/dev/null | xargs -I{} sh -c 'javap -p -cp {} net.minecraft.client.render.entity.LivingEntityRenderer >/dev/null 2>&1 && echo {}' | head -2)
           echo "JARS: $JAR"
           for J in $JAR; do
             echo "=== $J"
