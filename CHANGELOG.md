@@ -3,6 +3,19 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.45.0 - Auto Dig-Down Run And Deeper Server Watching
+**What's new**
+- **Auto dig-down run (Server Data Collector):** a new option that uses Baritone to dig straight down and stop every 16 blocks. At each stop it records which parts of the world the server sends you at that depth.
+- **Anti-ESP watching:** counts the players and mobs the server loads around you and how far away the farthest one is (totals only, never names or positions).
+- **Plugin channels:** lists the channels the server talks on, which often shows anticheats and other plugins.
+- **Fake ore check:** ancient debris in the overworld means the server adds decoy ores. Ore types and ores below Y16 are counted too.
+- Readable packet names in the data file, and your Y level on every line.
+
+**How to use**
+- Turn on **Server Data Collector**. For the dig run, also turn on **auto-dig-run**, stand where you want to start and do not move. It digs down to `dig-down-to` (default -56), waits `wait-seconds` at each stop, then walks back up if `return-to-start` is on.
+- It needs Baritone and stops by itself if your health gets low. Do not use it near lava or where digging is not allowed.
+- Read `server-summary-NAME.txt` in the `chukl-research` folder when it is done.
+
 ## v1.44.0 - Smarter Server Data Collector
 **What's new**
 - **The Server Data Collector now tells you in plain words what a server does**, and writes a short report file (`server-summary-NAME.txt`) next to the data file.

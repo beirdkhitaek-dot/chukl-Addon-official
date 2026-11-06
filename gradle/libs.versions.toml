@@ -1,6 +1,6 @@
 [versions]
 # Bump this on every update. It becomes the jar version: chukl-addon-<mod-version>.jar
-mod-version = "1.44.0"
+mod-version = "1.45.0"
 
 # Minecraft / Fabric / Meteor (Minecraft 1.21.11, yarn mappings)
 minecraft = "1.21.11"

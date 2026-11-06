@@ -5,6 +5,8 @@ import meteordevelopment.meteorclient.events.game.GameLeftEvent;
 import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.pathing.BaritoneUtils;
+import meteordevelopment.meteorclient.pathing.PathManagers;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
@@ -26,6 +28,10 @@ import net.minecraft.world.chunk.ChunkSection;
 import net.minecraft.world.chunk.WorldChunk;
 import net.minecraft.client.network.PlayerListEntry;
 import net.minecraft.network.packet.s2c.common.DisconnectS2CPacket;
+import net.minecraft.network.packet.s2c.common.CustomPayloadS2CPacket;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.registry.Registries;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -83,6 +89,29 @@ public class ServerDataCollector extends Module {
         .name("write-on-join").description("Write a line right after you join a world or server.")
         .defaultValue(true).build());
 
+    private final Setting<Boolean> autoRun = sg.add(new BoolSetting.Builder()
+        .name("auto-dig-run")
+        .description("Automatic test run: digs straight down with Baritone and stops every 16 blocks to record what the server sends you at each depth. Turn it on and leave your character alone. Needs Baritone (it comes with Meteor). Do not use it near lava or where digging is not allowed. It stops by itself if your health gets low.")
+        .defaultValue(false).build());
+
+    private final Setting<Integer> digTo = sg.add(new IntSetting.Builder()
+        .name("dig-down-to")
+        .description("How deep the automatic run goes (Y level). -56 is just above bedrock.")
+        .defaultValue(-56).range(-60, 200).sliderRange(-60, 60)
+        .visible(autoRun::get).build());
+
+    private final Setting<Integer> waitSeconds = sg.add(new IntSetting.Builder()
+        .name("wait-seconds")
+        .description("How long to stay at each stop, so the server has time to send you the chunks. 20 is a good value.")
+        .defaultValue(20).range(5, 120).sliderRange(10, 60)
+        .visible(autoRun::get).build());
+
+    private final Setting<Boolean> returnToStart = sg.add(new BoolSetting.Builder()
+        .name("return-to-start")
+        .description("When the run is finished, walk back up to where you started.")
+        .defaultValue(true)
+        .visible(autoRun::get).build());
+
     /** Anticheat product names that servers commonly show in messages. Only the matched name is ever stored. */
     private static final String[] AC_NAMES = {
         "nocheatplus", "grim", "vulcan", "matrix", "spartan", "verus", "intave", "themis", "polar", "karhu",
@@ -114,6 +143,24 @@ public class ServerDataCollector extends Module {
     private int joinDelay = 0;
     private String lastError = "";
 
+    // automatic dig-down run
+    private enum Auto { OFF, START_WAIT, DIGGING, WAITING, RETURNING }
+    private Auto auto = Auto.OFF;
+    private boolean autoFinished = false;
+    private final List<Integer> stops = new ArrayList<>();
+    private final List<String> digResults = new ArrayList<>();
+    private int stopIndex = 0, autoTicks = 0, stuckTicks = 0, retries = 0;
+    private BlockPos startPos = BlockPos.ORIGIN;
+    private final AtomicLong oresDeep = new AtomicLong(), oresDeepBuried = new AtomicLong();
+    private final Map<String, Integer> payloadChannels = new ConcurrentHashMap<>();
+    private final Map<Block, AtomicLong> oreMix = new ConcurrentHashMap<>();
+    private int lastPlayersLoaded = 0, lastEntitiesLoaded = 0, maxPlayerDistance = 0, maxEntityDistance = 0;
+    private int lastPlayersOnline = 0;
+
+    private static String packetName(net.minecraft.network.packet.Packet<?> p) {
+        try { return p.getPacketType().id().toString(); } catch (Throwable t) { return p.getClass().getSimpleName(); }
+    }
+
     public ServerDataCollector() {
         super(ChuklAddon.CATEGORY, "server-data-collector",
             "Research: writes technical facts about the server (brand, version, chunk radius, tick rate, ping, packet rates, passive anticheat indicators) to a file. No player names, chat text or positions.");
@@ -132,17 +179,24 @@ public class ServerDataCollector extends Module {
         joinDelay = 60;
         scanner = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "ServerData-Scan"); t.setDaemon(true); return t; });
         resetBlockStats();
+        auto = Auto.OFF;
+        autoFinished = false;
+        digResults.clear();
         info("Writing to: " + ResearchFiles.folder().getAbsolutePath() + " (server-data-" + ResearchFiles.serverName() + ".jsonl)");
     }
 
     @Override
     public void onDeactivate() {
+        if (auto != Auto.OFF) abortAuto("Module turned off.");
         if (scanner != null) scanner.shutdownNow();
         scanner = null;
     }
 
     private void resetBlockStats() {
         scanned.clear();
+        oreMix.clear();
+        payloadChannels.clear();
+        oresDeep.set(0); oresDeepBuried.set(0);
         oresTotal.set(0); oresBuried.set(0); chunksScanned.set(0); amethystClusters.set(0);
         blockUpdates.set(0); oresRevealed.set(0); revealedTotal.set(0);
         lastVerdict = "not enough data yet";
@@ -150,6 +204,7 @@ public class ServerDataCollector extends Module {
 
     @EventHandler
     private void onLeft(GameLeftEvent event) {
+        if (auto != Auto.OFF) { auto = Auto.OFF; autoFinished = true; stops.clear(); }
         resetBlockStats();
         sinceJoinTicks = 0;
         synchronized (acMentions) { acMentions.clear(); corrections = 0; }
@@ -161,8 +216,12 @@ public class ServerDataCollector extends Module {
 
     @EventHandler
     private void onPacket(PacketEvent.Receive event) {
-        String name = event.packet.getClass().getSimpleName();
+        String name = packetName(event.packet);
         if (anticheat.get()) {
+            // plugin channels the server talks on (anticheats and other plugins often register their own)
+            if (event.packet instanceof CustomPayloadS2CPacket cp) {
+                try { payloadChannels.merge(cp.payload().getId().id().toString(), 1, Integer::sum); } catch (Throwable ignored) {}
+            }
             // the server teleporting you after the join sequence = it corrected your movement
             if (event.packet instanceof PlayerPositionLookS2CPacket && sinceJoinTicks > 200) {
                 synchronized (acMentions) { corrections++; }
@@ -213,7 +272,173 @@ public class ServerDataCollector extends Module {
             write(now);
             return;
         }
+        autoTick();
         if (now - lastWrite >= interval.get() * 1000L) write(now);
+    }
+
+    // ---------------------------------------------------------------- automatic dig-down run
+
+    private void autoTick() {
+        if (!autoRun.get()) {
+            if (auto != Auto.OFF) abortAuto("Auto run turned off.");
+            autoFinished = false; // turning the setting off and on again starts a new run
+            return;
+        }
+        if (auto == Auto.OFF) {
+            if (!autoFinished) startAuto();
+            return;
+        }
+        // safety: low health stops everything
+        if (mc.player.getHealth() <= 8.0f && auto != Auto.RETURNING) {
+            abortAuto("Health is low (" + (int) mc.player.getHealth() + "), stopped for safety.");
+            return;
+        }
+        autoTicks++;
+        switch (auto) {
+            case START_WAIT -> {
+                if (autoTicks >= waitSeconds.get() * 20) { autoTicks = 0; stuckTicks = 0; retries = 0; beginDig(); }
+            }
+            case DIGGING -> {
+                int target = stops.get(stopIndex);
+                if (mc.player.getBlockY() <= target + 1) {
+                    PathManagers.get().stop();
+                    auto = Auto.WAITING;
+                    autoTicks = 0;
+                    return;
+                }
+                if (!PathManagers.get().isPathing()) {
+                    if (++stuckTicks > 60) {
+                        stuckTicks = 0;
+                        if (++retries > 3) { abortAuto("Baritone got stuck at Y " + mc.player.getBlockY() + " (could not dig further)."); return; }
+                        beginDig();
+                    }
+                } else stuckTicks = 0;
+                if (autoTicks > 20 * 120) abortAuto("Taking too long to reach Y " + target + ".");
+            }
+            case WAITING -> {
+                if (autoTicks >= waitSeconds.get() * 20) {
+                    recordStop(stops.get(stopIndex));
+                    stopIndex++;
+                    autoTicks = 0; stuckTicks = 0; retries = 0;
+                    if (stopIndex < stops.size()) beginDig();
+                    else finishAuto();
+                }
+            }
+            case RETURNING -> {
+                if (!PathManagers.get().isPathing()) {
+                    if (++stuckTicks > 100 || mc.player.getBlockY() >= startPos.getY() - 1) endAuto("Back at the start. Auto run finished.");
+                } else stuckTicks = 0;
+                if (autoTicks > 20 * 300) endAuto("Stopped walking back (took too long). Auto run finished.");
+            }
+            default -> {}
+        }
+    }
+
+    private void startAuto() {
+        if (!BaritoneUtils.IS_AVAILABLE) {
+            warning("Auto run needs Baritone and it was not found. Turn the setting off or install Baritone.");
+            autoFinished = true;
+            return;
+        }
+        startPos = mc.player.getBlockPos();
+        stops.clear();
+        digResults.clear();
+        int floor = Math.floorDiv(startPos.getY() - 1, 16) * 16;
+        for (int y = floor; y > digTo.get(); y -= 16) stops.add(y);
+        stops.add(digTo.get());
+        stopIndex = 0; autoTicks = 0; stuckTicks = 0; retries = 0;
+        auto = Auto.START_WAIT;
+        info("Auto run started at Y " + startPos.getY() + ": " + stops.size() + " stops down to Y " + digTo.get()
+            + ". First I record where you stand (" + waitSeconds.get() + "s), then I dig down. Do not move.");
+    }
+
+    private void beginDig() {
+        BlockPos here = mc.player.getBlockPos();
+        int target = stops.get(stopIndex);
+        auto = Auto.DIGGING;
+        // straight down from the start point, so the run always digs the same shaft
+        PathManagers.get().moveTo(new BlockPos(startPos.getX(), target, startPos.getZ()));
+        if (stopIndex == 0 && retries == 0) info("Digging down to Y " + target + " ...");
+    }
+
+    private void finishAuto() {
+        recordSummaryLine();
+        if (returnToStart.get()) {
+            auto = Auto.RETURNING;
+            autoTicks = 0; stuckTicks = 0;
+            PathManagers.get().moveTo(startPos);
+            info("Dig run done. Walking back up.");
+        } else endAuto("Auto run finished. Baritone stopped, you are at Y " + mc.player.getBlockY() + ".");
+    }
+
+    private void endAuto(String message) {
+        PathManagers.get().stop();
+        auto = Auto.OFF;
+        autoFinished = true;
+        stops.clear();
+        info(message + " Data is in " + ResearchFiles.folder().getAbsolutePath());
+    }
+
+    private void abortAuto(String why) {
+        PathManagers.get().stop();
+        warning("Auto run stopped: " + why);
+        if (mc.player != null && mc.world != null && !digResults.isEmpty()) recordSummaryLine();
+        auto = Auto.OFF;
+        autoFinished = true;
+        stops.clear();
+    }
+
+    /** One line per stop: where the player is and which parts of the world the server sent at this depth. */
+    private void recordStop(int target) {
+        try {
+            int y = mc.player.getBlockY();
+            String map = sectionMap(mc.world.getChunkManager().getWorldChunk(mc.player.getChunkPos().x, mc.player.getChunkPos().z));
+            int loaded = 0, withDeep = 0;
+            var manager = mc.world.getChunkManager();
+            var c = mc.player.getChunkPos();
+            int r = Math.max(2, Math.min(6, lastRadius > 0 ? lastRadius : 6));
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    if (!manager.isChunkLoaded(c.x + dx, c.z + dz)) continue;
+                    loaded++;
+                    if (sections(manager.getWorldChunk(c.x + dx, c.z + dz))[1] < 16) withDeep++;
+                }
+            }
+            long deep = oresDeep.get(), deepBuried = oresDeepBuried.get();
+            StringBuilder sb = new StringBuilder("{\"type\":\"dig-step\"");
+            sb.append(",\"time\":").append(ResearchFiles.json(Instant.now().toString()));
+            sb.append(",\"stop\":").append(stopIndex + 1).append(",\"of\":").append(stops.size());
+            sb.append(",\"targetY\":").append(target).append(",\"playerY\":").append(y);
+            sb.append(",\"waitedSeconds\":").append(waitSeconds.get());
+            sb.append(",\"loadedChunksAround\":").append(loaded);
+            sb.append(",\"chunksWithBlocksBelowY16\":").append(withDeep);
+            sb.append(",\"sectionMapHere\":").append(ResearchFiles.json(map));
+            sb.append(",\"oresBelowY16Seen\":").append(deep).append(",\"oresBelowY16Buried\":").append(deepBuried);
+            sb.append(",\"pingMs\":").append(mc.getNetworkHandler().getPlayerListEntry(mc.player.getUuid()) != null
+                ? mc.getNetworkHandler().getPlayerListEntry(mc.player.getUuid()).getLatency() : -1);
+            sb.append('}');
+            ResearchFiles.appendLine("server-data-" + ResearchFiles.serverName() + ".jsonl", sb.toString());
+            digResults.add("Y " + y + " (stop at " + target + "): " + withDeep + " of " + loaded + " chunks around you have blocks below Y16; your chunk: " + map);
+        } catch (Throwable t) {
+            warning("Could not record stop: " + t.getMessage());
+        }
+    }
+
+    private void recordSummaryLine() {
+        if (summaryFile.get()) writeSummary();
+    }
+
+    /** Your chunk from the bottom up. # = the server sent blocks in that 16-block layer, . = empty. */
+    private static String sectionMap(WorldChunk chunk) {
+        if (chunk == null) return "";
+        ChunkSection[] arr = chunk.getSectionArray();
+        int bottom = chunk.getBottomSectionCoord();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < arr.length; i++) {
+            if (i > 0) sb.append(' ');
+            sb.append((bottom + i) * 16).append(arr[i] == null || arr[i].isEmpty() ? ":." : ":#");
+        }
+        return sb.toString();
     }
 
     private void write(long now) {
@@ -248,7 +473,20 @@ public class ServerDataCollector extends Module {
 
         PlayerListEntry me = mc.getNetworkHandler().getPlayerListEntry(mc.player.getUuid());
         if (me != null) sb.append(",\"pingMs\":").append(me.getLatency());
-        sb.append(",\"playersOnline\":").append(mc.getNetworkHandler().getPlayerList().size());
+        lastPlayersOnline = mc.getNetworkHandler().getPlayerList().size();
+        sb.append(",\"playersOnline\":").append(lastPlayersOnline);
+        sb.append(",\"playerY\":").append(mc.player.getBlockY());
+        // anti-ESP check: only totals and the farthest distance are kept, never names or positions
+        int pl = 0, en = 0, farP = 0, farE = 0;
+        for (Entity e : mc.world.getEntities()) {
+            if (e == mc.player) continue;
+            int d = (int) e.distanceTo(mc.player);
+            if (e instanceof PlayerEntity) { pl++; farP = Math.max(farP, d); }
+            en++; farE = Math.max(farE, d);
+        }
+        lastPlayersLoaded = pl; lastEntitiesLoaded = en; maxPlayerDistance = farP; maxEntityDistance = farE;
+        sb.append(",\"otherPlayersLoaded\":").append(pl).append(",\"farthestPlayerBlocks\":").append(farP);
+        sb.append(",\"otherEntitiesLoaded\":").append(en).append(",\"farthestEntityBlocks\":").append(farE);
 
         sb.append(",\"clientViewDistance\":").append(mc.options.getViewDistance().getValue());
         sb.append(",\"clientSimulationDistance\":").append(mc.options.getSimulationDistance().getValue());
@@ -268,6 +506,13 @@ public class ServerDataCollector extends Module {
             int k = 0;
             for (Map.Entry<String, Integer> e : mentions.entrySet()) {
                 if (k++ > 0) sb.append(',');
+                sb.append(ResearchFiles.json(e.getKey())).append(':').append(e.getValue());
+            }
+            sb.append('}');
+            sb.append(",\"pluginChannelsSeen\":{");
+            int q = 0;
+            for (Map.Entry<String, Integer> e : payloadChannels.entrySet()) {
+                if (q++ > 0) sb.append(',');
                 sb.append(ResearchFiles.json(e.getKey())).append(':').append(e.getValue());
             }
             sb.append('}');
@@ -300,6 +545,18 @@ public class ServerDataCollector extends Module {
         return sb.append('}').toString();
     }
 
+    private boolean fakeOres = false;
+
+    private String oreMixJson() {
+        StringBuilder sb = new StringBuilder("{");
+        int i = 0;
+        for (Map.Entry<Block, AtomicLong> e : oreMix.entrySet()) {
+            if (i++ > 0) sb.append(',');
+            sb.append(ResearchFiles.json(Registries.BLOCK.getId(e.getKey()).getPath())).append(':').append(e.getValue().get());
+        }
+        return sb.append('}').toString();
+    }
+
     private static String softwareGuess(String brand) {
         String b = brand == null ? "" : brand.toLowerCase(java.util.Locale.ROOT);
         String[] names = {"folia", "purpur", "pufferfish", "leaf", "paper", "spigot", "bukkit", "velocity", "bungee", "waterfall", "fabric", "forge", "neoforge", "quilt", "vanilla"};
@@ -320,9 +577,16 @@ public class ServerDataCollector extends Module {
             else if (lastBuriedPct < 15) lastVerdict = "HIDES buried ores: anti-xray is on, so ores deep in rock are not sent to you";
             else if (lastBuriedPct < 45) lastVerdict = "maybe hides some ores, or this area is full of caves";
             else lastVerdict = "no hiding seen: buried ores are sent normally";
+            // ancient debris does not generate in the overworld, so seeing it there means the server adds fake ores
+            AtomicLong debris = oreMix.get(Blocks.ANCIENT_DEBRIS);
+            fakeOres = debris != null && debris.get() > 0 && "minecraft:overworld".equals(mc.world.getRegistryKey().getValue().toString());
+            if (fakeOres) lastVerdict = "FAKE ORES likely: ancient debris was seen in the overworld, where it never generates (anti-xray adds decoys)";
             sb.append(",\"blockHiding\":{\"oresSeen\":").append(total)
                 .append(",\"buriedPercent\":").append(String.format(java.util.Locale.ROOT, "%.1f", lastBuriedPct))
                 .append(",\"chunksChecked\":").append(chunksScanned.get())
+                .append(",\"oresBelowY16\":").append(oresDeep.get()).append(",\"oresBelowY16Buried\":").append(oresDeepBuried.get())
+                .append(",\"fakeOresLikely\":").append(fakeOres)
+                .append(",\"oreMix\":").append(oreMixJson())
                 .append(",\"verdict\":").append(ResearchFiles.json(lastVerdict)).append('}');
         }
         if (revealTracking.get()) {
@@ -344,6 +608,7 @@ public class ServerDataCollector extends Module {
         lastNear = near[0]; lastNearLow = near[1]; lastFar = far[0]; lastFarLow = far[1];
         sb.append(",\"nonEmptySectionsNear\":").append(near[0]).append(",\"nonEmptySectionsFar\":").append(far[0]);
         sb.append(",\"lowestBlockYNear\":").append(near[1]).append(",\"lowestBlockYFar\":").append(far[1]);
+        sb.append(",\"sectionMapHere\":").append(ResearchFiles.json(sectionMap(manager.getWorldChunk(c.x, c.z))));
         if (summaryFile.get()) writeSummary();
     }
 
@@ -396,7 +661,7 @@ public class ServerDataCollector extends Module {
         int bottom = chunk.getBottomSectionCoord();
         int sx = chunk.getPos().getStartX(), sz = chunk.getPos().getStartZ();
         BlockPos.Mutable p = new BlockPos.Mutable();
-        long total = 0, buried = 0, am = 0;
+        long total = 0, buried = 0, am = 0, deepT = 0, deepB = 0;
         for (int i = 0; i < arr.length; i++) {
             ChunkSection sec = arr[i];
             if (sec == null || sec.isEmpty()) continue;
@@ -408,19 +673,24 @@ public class ServerDataCollector extends Module {
                         Block b = sec.getBlockState(x, y, z).getBlock();
                         if (b == Blocks.AMETHYST_CLUSTER) { am++; continue; }
                         if (!ORES.contains(b)) continue;
+                        oreMix.computeIfAbsent(b, k -> new AtomicLong()).incrementAndGet();
                         if (x < 1 || x > 14 || z < 1 || z > 14) continue; // neighbours outside the chunk may not be loaded
                         total++;
+                        boolean isDeep = by0 + y < 16;
+                        if (isDeep) deepT++;
                         boolean open = false;
                         for (net.minecraft.util.math.Direction d : net.minecraft.util.math.Direction.values()) {
                             p.set(sx + x, by0 + y, sz + z).move(d);
                             BlockState n = world.getBlockState(p);
                             if (n.isAir() || !n.getFluidState().isEmpty()) { open = true; break; }
                         }
-                        if (!open) buried++;
+                        if (!open) { buried++; if (isDeep) deepB++; }
                     }
                 }
             }
         }
+        oresDeep.addAndGet(deepT);
+        oresDeepBuried.addAndGet(deepB);
         oresTotal.addAndGet(total);
         oresBuried.addAndGet(buried);
         amethystClusters.addAndGet(am);
@@ -450,7 +720,22 @@ public class ServerDataCollector extends Module {
                 .append(" (a normal server shows about 50% to 90%), chunks checked: ").append(chunksScanned.get()).append('\n');
             t.append("  amethyst clusters seen: ").append(amethystClusters.get()).append('\n');
             t.append("  ores shown to you later by block updates: ").append(revealedTotal.get()).append('\n');
-            t.append("  note: a server that adds FAKE ores cannot be told apart from a normal one by this check.\n");
+            t.append("  ores below Y16: ").append(oresDeep.get()).append(" (buried: ").append(oresDeepBuried.get()).append(")\n");
+            t.append("  ore types seen: ").append(oreMixJson()).append('\n');
+            t.append("  fake ores: ").append(fakeOres ? "LIKELY (ancient debris seen in the overworld)"
+                : "no sign. Decoy ores of normal types cannot be told apart from real ones by this check.").append("\n\n");
+            t.append("Anti-ESP (what the server shows you of other players and mobs):\n");
+            t.append("  players online: ").append(lastPlayersOnline).append(", other players loaded around you: ").append(lastPlayersLoaded)
+                .append(", farthest one: ").append(maxPlayerDistance).append(" blocks\n");
+            t.append("  other entities loaded: ").append(lastEntitiesLoaded).append(", farthest: ").append(maxEntityDistance).append(" blocks\n\n");
+            t.append("Plugin channels the server uses: ").append(payloadChannels.isEmpty() ? "none seen" : payloadChannels.toString()).append('\n');
+            synchronized (acMentions) {
+                t.append("Anticheat names seen in messages (latest sample): ").append(acMentions.isEmpty() ? "none" : acMentions.keySet().toString()).append('\n');
+            }
+            if (!digResults.isEmpty()) {
+                t.append("\nAuto dig-down run:\n");
+                for (String s : digResults) t.append("  ").append(s).append('\n');
+            }
             java.nio.file.Files.writeString(new java.io.File(ResearchFiles.folder(), "server-summary-" + ResearchFiles.serverName() + ".txt").toPath(), t.toString());
         } catch (Throwable ignored) {
         }
