@@ -13,6 +13,17 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.world.TickRate;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.SharedConstants;
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
+import net.minecraft.client.world.ClientWorld;
+import net.minecraft.network.packet.s2c.play.BlockUpdateS2CPacket;
+import net.minecraft.network.packet.s2c.play.ChunkDeltaUpdateS2CPacket;
+import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
+import net.minecraft.world.chunk.ChunkSection;
+import net.minecraft.world.chunk.WorldChunk;
 import net.minecraft.client.network.PlayerListEntry;
 import net.minecraft.network.packet.s2c.common.DisconnectS2CPacket;
 
@@ -21,6 +32,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Server Data Collector: for research. Every few seconds it writes one line of technical facts about the server you are
@@ -47,6 +64,21 @@ public class ServerDataCollector extends Module {
         .description("Passive observation only: counts how often the server moves you back (position corrections), notes anticheat names that appear in server messages (names only, never the text), and records the server's kick reason. Nothing is sent to the server and nothing is probed.")
         .defaultValue(true).build());
 
+    private final Setting<Boolean> hidingCheck = sg.add(new BoolSetting.Builder()
+        .name("block-hiding-check")
+        .description("Finds out if the server hides ores from you (anti-xray): it looks at how many ores are buried inside rock. Runs quietly in the background.")
+        .defaultValue(true).build());
+
+    private final Setting<Boolean> revealTracking = sg.add(new BoolSetting.Builder()
+        .name("late-reveal-tracking")
+        .description("Counts ores the server shows you later, after the chunk was sent (what anti-xray does when you get close).")
+        .defaultValue(true).build());
+
+    private final Setting<Boolean> summaryFile = sg.add(new BoolSetting.Builder()
+        .name("summary-file")
+        .description("Also write a short, easy-to-read report (server-summary-NAME.txt) next to the data file.")
+        .defaultValue(true).build());
+
     private final Setting<Boolean> writeOnJoin = sg.add(new BoolSetting.Builder()
         .name("write-on-join").description("Write a line right after you join a world or server.")
         .defaultValue(true).build());
@@ -57,6 +89,20 @@ public class ServerDataCollector extends Module {
         "negativity", "aac", "anticheat", "anti-cheat", "antixray", "anti-xray", "watchdog", "hawk"
     };
 
+    private static final Set<Block> ORES = new HashSet<>(List.of(
+        Blocks.COAL_ORE, Blocks.DEEPSLATE_COAL_ORE, Blocks.IRON_ORE, Blocks.DEEPSLATE_IRON_ORE,
+        Blocks.COPPER_ORE, Blocks.DEEPSLATE_COPPER_ORE, Blocks.GOLD_ORE, Blocks.DEEPSLATE_GOLD_ORE,
+        Blocks.REDSTONE_ORE, Blocks.DEEPSLATE_REDSTONE_ORE, Blocks.LAPIS_ORE, Blocks.DEEPSLATE_LAPIS_ORE,
+        Blocks.DIAMOND_ORE, Blocks.DEEPSLATE_DIAMOND_ORE, Blocks.EMERALD_ORE, Blocks.DEEPSLATE_EMERALD_ORE,
+        Blocks.ANCIENT_DEBRIS));
+
+    private ExecutorService scanner;
+    private final Map<ChunkPos, WorldChunk> scanned = new ConcurrentHashMap<>();
+    private final AtomicLong oresTotal = new AtomicLong(), oresBuried = new AtomicLong(), chunksScanned = new AtomicLong(),
+        amethystClusters = new AtomicLong(), blockUpdates = new AtomicLong(), oresRevealed = new AtomicLong(), revealedTotal = new AtomicLong();
+    private String lastVerdict = "not enough data yet", lastSoftware = "", lastSummaryServer = "";
+    private int lastNear = -1, lastFar = -1, lastNearLow = 0, lastFarLow = 0, lastRadius = 0, lastCorrections = 0;
+    private double lastBuriedPct = -1;
     private final Map<String, Integer> packetCounts = new HashMap<>();
     private final Map<String, Integer> acMentions = new HashMap<>();
     private int corrections = 0;
@@ -84,11 +130,27 @@ public class ServerDataCollector extends Module {
         lines = 0;
         pendingJoin = writeOnJoin.get();
         joinDelay = 60;
+        scanner = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "ServerData-Scan"); t.setDaemon(true); return t; });
+        resetBlockStats();
         info("Writing to: " + ResearchFiles.folder().getAbsolutePath() + " (server-data-" + ResearchFiles.serverName() + ".jsonl)");
+    }
+
+    @Override
+    public void onDeactivate() {
+        if (scanner != null) scanner.shutdownNow();
+        scanner = null;
+    }
+
+    private void resetBlockStats() {
+        scanned.clear();
+        oresTotal.set(0); oresBuried.set(0); chunksScanned.set(0); amethystClusters.set(0);
+        blockUpdates.set(0); oresRevealed.set(0); revealedTotal.set(0);
+        lastVerdict = "not enough data yet";
     }
 
     @EventHandler
     private void onLeft(GameLeftEvent event) {
+        resetBlockStats();
         sinceJoinTicks = 0;
         synchronized (acMentions) { acMentions.clear(); corrections = 0; }
         packetCounts.clear();
@@ -102,7 +164,7 @@ public class ServerDataCollector extends Module {
         String name = event.packet.getClass().getSimpleName();
         if (anticheat.get()) {
             // the server teleporting you after the join sequence = it corrected your movement
-            if (name.equals("PlayerPositionLookS2CPacket") && sinceJoinTicks > 200) {
+            if (event.packet instanceof PlayerPositionLookS2CPacket && sinceJoinTicks > 200) {
                 synchronized (acMentions) { corrections++; }
             }
             if (event.packet instanceof DisconnectS2CPacket d) {
@@ -111,6 +173,17 @@ public class ServerDataCollector extends Module {
                 ResearchFiles.appendLine("server-data-" + ResearchFiles.serverName() + ".jsonl",
                     "{\"type\":\"kick\",\"time\":" + ResearchFiles.json(Instant.now().toString())
                         + ",\"reason\":" + ResearchFiles.json(reason) + "}");
+            }
+        }
+        if (revealTracking.get()) {
+            if (event.packet instanceof BlockUpdateS2CPacket b) {
+                blockUpdates.incrementAndGet();
+                if (ORES.contains(b.getState().getBlock())) { oresRevealed.incrementAndGet(); revealedTotal.incrementAndGet(); }
+            } else if (event.packet instanceof ChunkDeltaUpdateS2CPacket d) {
+                d.visitUpdates((pos, state) -> {
+                    blockUpdates.incrementAndGet();
+                    if (ORES.contains(state.getBlock())) { oresRevealed.incrementAndGet(); revealedTotal.incrementAndGet(); }
+                });
             }
         }
         if (!packetStats.get()) return;
@@ -223,7 +296,164 @@ public class ServerDataCollector extends Module {
             }
             sb.append('}');
         }
+        appendBlockFacts(sb, seconds);
         return sb.append('}').toString();
+    }
+
+    private static String softwareGuess(String brand) {
+        String b = brand == null ? "" : brand.toLowerCase(java.util.Locale.ROOT);
+        String[] names = {"folia", "purpur", "pufferfish", "leaf", "paper", "spigot", "bukkit", "velocity", "bungee", "waterfall", "fabric", "forge", "neoforge", "quilt", "vanilla"};
+        for (String n : names) if (b.contains(n)) return n;
+        return "unknown (custom brand)";
+    }
+
+    /** Block hiding check, late reveals, Y levels and the plain-language summary. */
+    private void appendBlockFacts(StringBuilder sb, double seconds) {
+        lastSoftware = softwareGuess(mc.getNetworkHandler().getBrand());
+        sb.append(",\"softwareGuess\":").append(ResearchFiles.json(lastSoftware));
+
+        if (hidingCheck.get()) {
+            scheduleScans();
+            long total = oresTotal.get(), buried = oresBuried.get();
+            lastBuriedPct = total > 0 ? 100.0 * buried / total : -1;
+            if (total < 30) lastVerdict = "not enough data yet (" + total + " ores seen so far, walk around for a while)";
+            else if (lastBuriedPct < 15) lastVerdict = "HIDES buried ores: anti-xray is on, so ores deep in rock are not sent to you";
+            else if (lastBuriedPct < 45) lastVerdict = "maybe hides some ores, or this area is full of caves";
+            else lastVerdict = "no hiding seen: buried ores are sent normally";
+            sb.append(",\"blockHiding\":{\"oresSeen\":").append(total)
+                .append(",\"buriedPercent\":").append(String.format(java.util.Locale.ROOT, "%.1f", lastBuriedPct))
+                .append(",\"chunksChecked\":").append(chunksScanned.get())
+                .append(",\"verdict\":").append(ResearchFiles.json(lastVerdict)).append('}');
+        }
+        if (revealTracking.get()) {
+            long upd = blockUpdates.getAndSet(0), rev = oresRevealed.getAndSet(0);
+            sb.append(",\"blockUpdatesPerSecond\":").append(String.format(java.util.Locale.ROOT, "%.1f", upd / seconds));
+            sb.append(",\"oresRevealedByUpdates\":").append(rev);
+        }
+        // does the server send the full height far away too?
+        var manager = mc.world.getChunkManager();
+        var c = mc.player.getChunkPos();
+        lastRadius = measureRadius();
+        int[] near = sections(manager.getWorldChunk(c.x, c.z));
+        int[] far = {0, 0};
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (int[] d : dirs) {
+            int cx = c.x + d[0] * lastRadius, cz = c.z + d[1] * lastRadius;
+            if (manager.isChunkLoaded(cx, cz)) { far = sections(manager.getWorldChunk(cx, cz)); break; }
+        }
+        lastNear = near[0]; lastNearLow = near[1]; lastFar = far[0]; lastFarLow = far[1];
+        sb.append(",\"nonEmptySectionsNear\":").append(near[0]).append(",\"nonEmptySectionsFar\":").append(far[0]);
+        sb.append(",\"lowestBlockYNear\":").append(near[1]).append(",\"lowestBlockYFar\":").append(far[1]);
+        if (summaryFile.get()) writeSummary();
+    }
+
+    /** {number of sections that contain blocks, lowest Y that contains blocks}. */
+    private static int[] sections(WorldChunk chunk) {
+        if (chunk == null) return new int[]{0, 0};
+        ChunkSection[] arr = chunk.getSectionArray();
+        int bottom = chunk.getBottomSectionCoord(), n = 0, low = Integer.MAX_VALUE;
+        for (int i = 0; i < arr.length; i++) {
+            if (arr[i] == null || arr[i].isEmpty()) continue;
+            n++;
+            low = Math.min(low, (bottom + i) * 16);
+        }
+        return new int[]{n, low == Integer.MAX_VALUE ? 0 : low};
+    }
+
+    private void scheduleScans() {
+        ExecutorService ex = scanner;
+        if (ex == null || mc.world == null) return;
+        var manager = mc.world.getChunkManager();
+        ChunkPos c = mc.player.getChunkPos();
+        List<WorldChunk> todo = new ArrayList<>();
+        for (int dx = -8; dx <= 8; dx++) {
+            for (int dz = -8; dz <= 8; dz++) {
+                if (!manager.isChunkLoaded(c.x + dx, c.z + dz)) continue;
+                WorldChunk ch = manager.getWorldChunk(c.x + dx, c.z + dz);
+                if (ch == null || scanned.get(ch.getPos()) == ch) continue;
+                todo.add(ch);
+            }
+        }
+        todo.sort((a, b) -> Integer.compare(dist2(a.getPos(), c), dist2(b.getPos(), c)));
+        ClientWorld world = mc.world;
+        for (int i = 0; i < Math.min(12, todo.size()); i++) {
+            WorldChunk ch = todo.get(i);
+            scanned.put(ch.getPos(), ch);
+            ex.execute(() -> {
+                try { scanChunk(world, ch); } catch (Throwable ignored) {}
+            });
+        }
+        if (scanned.size() > 600) scanned.keySet().removeIf(p -> !manager.isChunkLoaded(p.x, p.z));
+    }
+
+    private static int dist2(ChunkPos a, ChunkPos b) {
+        return (a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z);
+    }
+
+    /** Counts ores in the middle of the chunk and how many of them are completely surrounded by blocks. */
+    private void scanChunk(ClientWorld world, WorldChunk chunk) {
+        ChunkSection[] arr = chunk.getSectionArray();
+        int bottom = chunk.getBottomSectionCoord();
+        int sx = chunk.getPos().getStartX(), sz = chunk.getPos().getStartZ();
+        BlockPos.Mutable p = new BlockPos.Mutable();
+        long total = 0, buried = 0, am = 0;
+        for (int i = 0; i < arr.length; i++) {
+            ChunkSection sec = arr[i];
+            if (sec == null || sec.isEmpty()) continue;
+            if (!sec.hasAny(s -> ORES.contains(s.getBlock()) || s.getBlock() == Blocks.AMETHYST_CLUSTER)) continue;
+            int by0 = (bottom + i) * 16;
+            for (int x = 0; x < 16; x++) {
+                for (int y = 0; y < 16; y++) {
+                    for (int z = 0; z < 16; z++) {
+                        Block b = sec.getBlockState(x, y, z).getBlock();
+                        if (b == Blocks.AMETHYST_CLUSTER) { am++; continue; }
+                        if (!ORES.contains(b)) continue;
+                        if (x < 1 || x > 14 || z < 1 || z > 14) continue; // neighbours outside the chunk may not be loaded
+                        total++;
+                        boolean open = false;
+                        for (net.minecraft.util.math.Direction d : net.minecraft.util.math.Direction.values()) {
+                            p.set(sx + x, by0 + y, sz + z).move(d);
+                            BlockState n = world.getBlockState(p);
+                            if (n.isAir() || !n.getFluidState().isEmpty()) { open = true; break; }
+                        }
+                        if (!open) buried++;
+                    }
+                }
+            }
+        }
+        oresTotal.addAndGet(total);
+        oresBuried.addAndGet(buried);
+        amethystClusters.addAndGet(am);
+        chunksScanned.incrementAndGet();
+    }
+
+    private void writeSummary() {
+        try {
+            var entry = mc.getCurrentServerEntry();
+            String server = entry != null ? entry.address : "singleplayer";
+            StringBuilder t = new StringBuilder();
+            t.append("Server summary: ").append(server).append('\n');
+            t.append("Updated: ").append(Instant.now()).append("\n\n");
+            t.append("Software: ").append(mc.getNetworkHandler().getBrand()).append("  (looks like: ").append(lastSoftware).append(")\n");
+            t.append("Game version: ").append(SharedConstants.getGameVersion().name()).append('\n');
+            t.append("Players online: ").append(mc.getNetworkHandler().getPlayerList().size()).append('\n');
+            t.append("Server speed: ").append(String.format(java.util.Locale.ROOT, "%.1f", TickRate.INSTANCE.getTickRate())).append(" ticks per second (20 is perfect)\n\n");
+            t.append("How far the server sends chunks: ").append(lastRadius).append(" chunks  (your render distance is ")
+                .append(mc.options.getViewDistance().getValue()).append(")\n");
+            t.append("Full height sent near you: ").append(lastNear).append(" sections, lowest block Y ").append(lastNearLow).append('\n');
+            t.append("Full height sent far away: ").append(lastFar).append(" sections, lowest block Y ").append(lastFarLow);
+            if (lastFar >= 0 && lastNear > 0 && lastFar < lastNear - 2) t.append("  <- the server cuts the height far away");
+            t.append("\n\n");
+            t.append("Does it hide ores? ").append(lastVerdict).append('\n');
+            t.append("  ores seen: ").append(oresTotal.get()).append(", buried inside rock: ")
+                .append(lastBuriedPct < 0 ? "?" : String.format(java.util.Locale.ROOT, "%.0f%%", lastBuriedPct))
+                .append(" (a normal server shows about 50% to 90%), chunks checked: ").append(chunksScanned.get()).append('\n');
+            t.append("  amethyst clusters seen: ").append(amethystClusters.get()).append('\n');
+            t.append("  ores shown to you later by block updates: ").append(revealedTotal.get()).append('\n');
+            t.append("  note: a server that adds FAKE ores cannot be told apart from a normal one by this check.\n");
+            java.nio.file.Files.writeString(new java.io.File(ResearchFiles.folder(), "server-summary-" + ResearchFiles.serverName() + ".txt").toPath(), t.toString());
+        } catch (Throwable ignored) {
+        }
     }
 
     /** The farthest chunk (in chunks, square distance) that is loaded around you. */

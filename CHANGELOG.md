@@ -3,6 +3,19 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.44.0 - Smarter Server Data Collector
+**What's new**
+- **The Server Data Collector now tells you in plain words what a server does**, and writes a short report file (`server-summary-NAME.txt`) next to the data file.
+- **Hides ores?** It checks how many ores are buried inside rock. If almost none are, the server uses anti-xray, and the report says so.
+- **Late reveals:** counts ores the server shows you after the chunk was sent.
+- **Real range and height:** how many chunks the server really sends, and whether it cuts the height far away.
+- **Software guess** from the server brand (Paper, Folia, Purpur, Fabric ...), and position corrections are now counted correctly.
+- A server that adds fake ores cannot be told apart from a normal one by this check.
+
+**How to use**
+- Turn on **Server Data Collector**, join a server and walk around for a minute or two. Open the `chukl-research` folder (the path is shown in chat) and read `server-summary-NAME.txt`.
+- Each new check can be switched off in the module settings.
+
 ## v1.43.1 - Amethyst See-Through Up To Y 29
 **What's new**
 - **Both Sus Chunk Finder and Sus Chunk Finder Test** now box grown amethyst clusters from Y -64 up to **Y 29** (was -29), drawn through walls.
