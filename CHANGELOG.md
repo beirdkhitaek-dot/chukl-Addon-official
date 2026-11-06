@@ -3,6 +3,13 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.42.3 - Frost Storage ESP Tracer Width
+**What's new**
+- **Frost Storage ESP: new `tracer-width` setting.** Tracers can now be thick. The width is in screen pixels, so a tracer looks equally thick near and far. 1 is the old thin line.
+
+**How to use**
+- Open Frost Storage ESP, keep `tracers` on and raise `tracer-width` (try 2 to 4). Replace the old jar with `chukl-addon-1.42.3.jar`.
+
 ## v1.42.2 - CS16 Player Model: Sitting, Swimming, Head Look, Knife In Freecam
 **What's new**
 - **Sitting**: a player riding a boat, minecart, horse or anything else now sits (thighs forward, shins down). CS has no sitting animation, so it is built from the leg bones.

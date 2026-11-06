@@ -80,6 +80,10 @@ public class FrostStorageEsp extends Module {
     private final Setting<Integer> tracerAlpha = sgGeneral.add(new IntSetting.Builder()
         .name("tracer-alpha").defaultValue(255).sliderMax(500).build());
 
+    private final Setting<Double> tracerWidth = sgGeneral.add(new DoubleSetting.Builder()
+        .name("tracer-width").description("Thickness of the tracers in pixels on screen (1 = the thin default line).")
+        .defaultValue(1.0).min(1.0).max(16.0).sliderMin(1.0).sliderMax(8.0).build());
+
     private final Setting<Boolean> coordinateTracers = sgGeneral.add(new BoolSetting.Builder()
         .name("coordinate-tracers")
         .description("Tracers start 4 blocks in front of your head in the world instead of at the camera (good with freecam).")
@@ -306,7 +310,26 @@ public class FrostStorageEsp extends Module {
             for (int i = 0; i < n; i++) {
                 Item it = list.get(i);
                 Color tc = new Color(it.color.r, it.color.g, it.color.b, Math.max(0, Math.min(255, tracerAlpha.get())));
-                event.renderer.line(sx, sy, sz, it.cx, it.cy, it.cz, tc);
+                double w = tracerWidth.get();
+                if (w <= 1.05) {
+                    event.renderer.line(sx, sy, sz, it.cx, it.cy, it.cz, tc);
+                    continue;
+                }
+                // thick tracer: a flat ribbon that always faces the camera, with a constant width on screen
+                double ex = RenderUtils.center.x, ey = RenderUtils.center.y, ez = RenderUtils.center.z;
+                double dx = it.cx - sx, dy = it.cy - sy, dz = it.cz - sz;
+                double vx = (sx + it.cx) / 2 - ex, vy = (sy + it.cy) / 2 - ey, vz = (sz + it.cz) / 2 - ez;
+                double px = dy * vz - dz * vy, py = dz * vx - dx * vz, pz = dx * vy - dy * vx;
+                double pl = Math.sqrt(px * px + py * py + pz * pz);
+                if (pl < 1e-9) {
+                    event.renderer.line(sx, sy, sz, it.cx, it.cy, it.cz, tc);
+                    continue;
+                }
+                px /= pl; py /= pl; pz /= pl;
+                double h0 = w * 0.0008 * Math.sqrt((sx - ex) * (sx - ex) + (sy - ey) * (sy - ey) + (sz - ez) * (sz - ez));
+                double h1 = w * 0.0008 * Math.sqrt((it.cx - ex) * (it.cx - ex) + (it.cy - ey) * (it.cy - ey) + (it.cz - ez) * (it.cz - ez));
+                event.renderer.quad(sx - px * h0, sy - py * h0, sz - pz * h0, sx + px * h0, sy + py * h0, sz + pz * h0,
+                    it.cx + px * h1, it.cy + py * h1, it.cz + pz * h1, it.cx - px * h1, it.cy - py * h1, it.cz - pz * h1, tc);
             }
         }
     }
