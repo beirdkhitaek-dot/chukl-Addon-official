@@ -3,6 +3,15 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.47.0 - Faster And Lighter
+**What's new**
+- **Light ESP uses less power:** the list of chunks and the colors are no longer rebuilt every frame. This helps most on phones.
+- **Custom block search is faster:** DeepBlockEntityEsp now skips layers that cannot hold any of your chosen blocks, so the scan every 3 seconds costs much less.
+- **Deep amethyst boxes** are sorted less often (from 1.46.0), with the same look.
+
+**How to use**
+- Nothing to change. Everything works as before, just lighter.
+
 ## v1.46.0 - Deep Amethyst Stays On Screen
 **What's new**
 - **Sus Chunk Finder and Sus Chunk Finder Test now remember every grown amethyst cluster they find.** The boxes stay on screen after you walk away or go back up, instead of disappearing when the layer is no longer near you. A cluster is only forgotten when you change world or you can see it was mined.

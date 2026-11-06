@@ -206,17 +206,30 @@ public class DeepBlockEntityEsp extends Module {
         for (int cx = centerChunkX - radius; cx <= centerChunkX + radius; cx++) {
             for (int cz = centerChunkZ - radius; cz <= centerChunkZ + radius; cz++) {
                 if (!world.getChunkManager().isChunkLoaded(cx, cz)) continue;
+                net.minecraft.world.chunk.WorldChunk chunk = world.getChunkManager().getWorldChunk(cx, cz);
+                if (chunk == null) continue;
+                net.minecraft.world.chunk.ChunkSection[] sections = chunk.getSectionArray();
+                int bottom = chunk.getBottomSectionCoord();
 
                 int bx = cx << 4, bz = cz << 4;
 
-                for (int x = bx; x < bx + 16; x++) {
-                    for (int z = bz; z < bz + 16; z++) {
-                        for (int y = lowY; y <= highY; y++) {
-                            Block block = world.getBlockState(pos.set(x, y, z)).getBlock();
-                            if (!targets.contains(block)) continue;
+                for (int i = 0; i < sections.length; i++) {
+                    int secY = (bottom + i) << 4;
+                    if (secY + 15 < lowY || secY > highY) continue;
+                    // palette check: a layer that holds none of the target blocks is skipped without looking at its blocks
+                    net.minecraft.world.chunk.ChunkSection sec = sections[i];
+                    if (sec == null || sec.isEmpty() || !sec.hasAny(st -> targets.contains(st.getBlock()))) continue;
 
-                            result.add(new Found(pos.toImmutable(), block));
-                            if (result.size() >= MAX_CUSTOM_FOUND) return result;
+                    int y0 = Math.max(lowY, secY), y1 = Math.min(highY, secY + 15);
+                    for (int x = bx; x < bx + 16; x++) {
+                        for (int z = bz; z < bz + 16; z++) {
+                            for (int y = y0; y <= y1; y++) {
+                                Block block = sec.getBlockState(x & 15, y & 15, z & 15).getBlock();
+                                if (!targets.contains(block)) continue;
+
+                                result.add(new Found(new BlockPos(x, y, z), block));
+                                if (result.size() >= MAX_CUSTOM_FOUND) return result;
+                            }
                         }
                     }
                 }

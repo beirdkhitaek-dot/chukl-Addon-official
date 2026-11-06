@@ -867,6 +867,11 @@ public class SusChunkFinderTest extends Module {
     private final Map<ChunkPos, List<BlockPos>> amethystBlocks = new ConcurrentHashMap<>();
     /** Every grown cluster ever seen in this world (client memory only), so boxes stay after you go back up. */
     private final DeepAmethystMemory amMemory = new DeepAmethystMemory();
+    private List<ChunkPos> lightChunkCache;
+    private int lightChunkKey;
+    private long lightChunkAt;
+    private final Color[] lightPalette = new Color[15];
+    private int lightPaletteKey = Integer.MIN_VALUE;
     private int lastAmCount = -1;
     private boolean amHinted = false;
     private final Set<ChunkPos> lavaChunks = ConcurrentHashMap.newKeySet();
@@ -2427,27 +2432,48 @@ public class SusChunkFinderTest extends Module {
         if (litCells.isEmpty()) return;
 
         ChunkPos here = mc.player.getChunkPos();
-        List<ChunkPos> chunks;
-        switch (espScope.get()) {
-            case Best_Chunks:
-                chunks = new ArrayList<>(bestChunks);
-                break;
-            case Flagged_Chunks:
-                chunks = new ArrayList<>(susChunks.keySet());
-                break;
-            default:
-                chunks = new ArrayList<>(litCells.keySet());
-                break;
-        }
-        if (espScope.get() != EspScope.Best_Chunks) {
-            chunks.sort(java.util.Comparator.comparingInt((ChunkPos c) ->
-                (c.x - here.x) * (c.x - here.x) + (c.z - here.z) * (c.z - here.z)));
+        // the chunk list is rebuilt and sorted only when something changed or every half second, not every frame
+        EspScope scope = espScope.get();
+        int key = java.util.Objects.hash(scope, bestChunks.size(), susChunks.size(), litCells.size(), here);
+        long now = System.currentTimeMillis();
+        List<ChunkPos> chunks = lightChunkCache;
+        if (chunks == null || key != lightChunkKey || now - lightChunkAt > 500) {
+            switch (scope) {
+                case Best_Chunks:
+                    chunks = new ArrayList<>(bestChunks);
+                    break;
+                case Flagged_Chunks:
+                    chunks = new ArrayList<>(susChunks.keySet());
+                    break;
+                default:
+                    chunks = new ArrayList<>(litCells.keySet());
+                    break;
+            }
+            if (scope != EspScope.Best_Chunks) {
+                chunks.sort(java.util.Comparator.comparingInt((ChunkPos c) ->
+                    (c.x - here.x) * (c.x - here.x) + (c.z - here.z) * (c.z - here.z)));
+            }
+            lightChunkCache = chunks; lightChunkKey = key; lightChunkAt = now;
         }
 
         SettingColor base = espColor.get();
         int a = Math.max(1, Math.min(255, espAlpha.get()));
         int cap = espMaxBoxes.get();
         int drawn = 0;
+
+        // 15 light levels, so the colors are made once, not once per box per frame
+        int palKey = java.util.Objects.hash(base.r, base.g, base.b, a);
+        if (palKey != lightPaletteKey) {
+            for (int i = 0; i < 15; i++) {
+                double t = i / 14.0;
+                lightPalette[i] = new Color(
+                    (int) Math.round((base.r - 19) * t + 19),
+                    (int) Math.round((base.g - 19) * t + 19),
+                    (int) Math.round((base.b - 50) * t + 50),
+                    a);
+            }
+            lightPaletteKey = palKey;
+        }
 
         for (ChunkPos cp : chunks) {
             LitCells cells = litCells.get(cp);
@@ -2457,13 +2483,7 @@ public class SusChunkFinderTest extends Module {
             for (int i = 0; i < cells.lvl().length; i++) {
                 if (drawn >= cap) return;
 
-                double t = Math.max(0.0, Math.min(1.0, (cells.lvl()[i] - 1) / 14.0));
-                Color c = new Color(
-                    (int) Math.round((base.r - 19) * t + 19),
-                    (int) Math.round((base.g - 19) * t + 19),
-                    (int) Math.round((base.b - 50) * t + 50),
-                    a
-                );
+                Color c = lightPalette[Math.max(0, Math.min(14, cells.lvl()[i] - 1))];
 
                 int x = cells.xyz()[i * 3], y = cells.xyz()[i * 3 + 1], z = cells.xyz()[i * 3 + 2];
                 event.renderer.box(x, y, z, x + 1, y + 1, z + 1, c, c, ShapeMode.Sides, 0);
