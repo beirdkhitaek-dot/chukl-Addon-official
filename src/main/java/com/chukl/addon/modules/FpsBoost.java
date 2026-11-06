@@ -137,9 +137,9 @@ public class FpsBoost extends Module {
         double ent;
         boolean part, clouds, shadows, bob, blend;
         switch (preset.get()) {
-            case Balanced -> { view = 10; sim = 8; ent = 0.8; part = true; clouds = false; fast = false; shadows = true; bob = noBob.get(); blend = false; }
-            case Aggressive -> { view = 8; sim = 6; ent = 0.6; part = true; clouds = true; fast = true; shadows = false; bob = true; blend = true; }
-            case Potato -> { view = 5; sim = 5; ent = 0.5; part = true; clouds = true; fast = true; shadows = false; bob = true; blend = true; }
+            case Balanced -> { view = 10; sim = 8; ent = 0.8; part = true; clouds = false; shadows = true; bob = noBob.get(); blend = false; }
+            case Aggressive -> { view = 8; sim = 6; ent = 0.6; part = true; clouds = true; shadows = false; bob = true; blend = true; }
+            case Potato -> { view = 5; sim = 5; ent = 0.5; part = true; clouds = true; shadows = false; bob = true; blend = true; }
             default -> { view = viewDistance.get(); sim = simDistance.get(); ent = entityDistance.get(); part = particlesMin.get(); clouds = noClouds.get(); shadows = noShadows.get(); bob = noBob.get(); blend = lowerBlend.get(); }
         }
         baseView = view;
