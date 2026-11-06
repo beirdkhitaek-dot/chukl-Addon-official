@@ -955,7 +955,7 @@ public class SusChunkFinder extends Module {
     @EventHandler
     private void onDeepNotice(Render2DEvent event) {
         if (!deepAm.get() || !amNotice.get() || mc.world == null || mc.player == null || mc.options.hudHidden) return;
-        if (!mc.world.getRegistryKey() == net.minecraft.world.World.OVERWORLD) return;
+        if (mc.world.getRegistryKey() != net.minecraft.world.World.OVERWORLD) return;
         if (DeepAmethystMemory.deepLayersMissing(mc, amMinY.get(), amMaxY.get())) DeepAmethystMemory.drawNotice(event, mc);
     }
 

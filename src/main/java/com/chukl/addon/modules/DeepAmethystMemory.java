@@ -34,6 +34,10 @@ final class DeepAmethystMemory {
 
     private final Map<ChunkPos, Set<BlockPos>> found = new ConcurrentHashMap<>();
     private volatile ClientWorld world;
+    private List<ChunkPos> sorted;
+    private ChunkPos sortedFor;
+    private int sortedSize;
+    private long sortedAt;
 
     /** Remember clusters found in a chunk. The memory starts empty again when the world changes. */
     void remember(ClientWorld w, ChunkPos cp, Collection<BlockPos> blocks) {
@@ -62,9 +66,15 @@ final class DeepAmethystMemory {
         clearIfNewWorld(mc.world);
         int lo = Math.min(minY, maxY), hi = Math.max(minY, maxY);
         ChunkPos here = mc.player.getChunkPos();
-        List<ChunkPos> chunks = new ArrayList<>(found.keySet());
-        chunks.sort(Comparator.comparingInt((ChunkPos c) ->
-            (c.x - here.x) * (c.x - here.x) + (c.z - here.z) * (c.z - here.z)));
+        // sorting is the expensive part, so it is redone only when you change chunk, a chunk is added, or every half second
+        long now = System.currentTimeMillis();
+        List<ChunkPos> chunks = sorted;
+        if (chunks == null || !here.equals(sortedFor) || sortedSize != found.size() || now - sortedAt > 500) {
+            chunks = new ArrayList<>(found.keySet());
+            chunks.sort(Comparator.comparingInt((ChunkPos c) ->
+                (c.x - here.x) * (c.x - here.x) + (c.z - here.z) * (c.z - here.z)));
+            sorted = chunks; sortedFor = here; sortedSize = found.size(); sortedAt = now;
+        }
         var manager = mc.world.getChunkManager();
         int drawn = 0;
         for (ChunkPos cp : chunks) {
