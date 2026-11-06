@@ -86,3 +86,31 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "v${VERSION} - ${NAME}" \
             --notes-file release-notes.md
+
+  # Private test build: a push to the "dev" branch attaches the jar to a DRAFT release (only repo collaborators can see
+  # drafts, customers cannot). The draft is replaced on every push. Nothing public is created.
+  dev-draft:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: chukl-addon
+          path: dist
+
+      - name: Create private draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(grep '^mod-version' gradle/libs.versions.toml | sed 's/.*"\(.*\)".*/\1/')
+          JAR=$(find dist -name "chukl-addon-${VERSION}.jar" | head -n 1)
+          test -n "$JAR"
+          gh release delete "dev-test" --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release create "dev-test" "$JAR" --draft --prerelease --target "$GITHUB_SHA" \
+            --title "PRIVATE test build v${VERSION}" \
+            --notes "Private test build, not for customers."
