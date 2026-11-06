@@ -3,6 +3,18 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.43.0 - FPS Boost For ZalithLauncher 2
+**What's new**
+- **New module: FPS Boost** (Visual category), made for phones running ZalithLauncher 2 with MobileGlues. Those setups are limited by the CPU and draw calls, so it lowers what the game draws and simulates:
+  - Presets: **Balanced**, **Aggressive** (default), **Potato** and **Custom** (view distance, simulation distance, entity distance, particles, clouds, graphics mode, entity shadows, view bobbing, biome blend).
+  - **Auto Tune**: lowers the view distance when FPS stays under your target and raises it again when there is room, never below your minimum.
+  - Your own settings are saved when you turn it on and restored when you turn it off.
+- It is generic for now. I do not know your phone model, so the presets are a good starting point and not tuned to one chip yet.
+
+**How to use**
+- Turn on **FPS Boost**. Try Aggressive first; if the game still lags, use Potato, or Custom to choose each value.
+- Auto Tune: set target-fps to what you want (for example 40). Replace the old jar with `chukl-addon-1.43.0.jar`.
+
 ## v1.42.3 - Frost Storage ESP Tracer Width
 **What's new**
 - **Frost Storage ESP: new `tracer-width` setting.** Tracers can now be thick. The width is in screen pixels, so a tracer looks equally thick near and far. 1 is the old thin line.
