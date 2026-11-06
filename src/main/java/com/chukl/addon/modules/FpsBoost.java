@@ -11,8 +11,7 @@ import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.option.CloudRenderMode;
-import net.minecraft.client.option.GraphicsMode;
-import net.minecraft.client.option.ParticlesMode;
+import net.minecraft.client.option.SimpleOption;
 
 /**
  * FPS Boost, tuned for Android phones running Minecraft through ZalithLauncher 2 with MobileGlues (OpenGL to GLES):
@@ -48,9 +47,6 @@ public class FpsBoost extends Module {
     private final Setting<Boolean> noClouds = sgGeneral.add(new BoolSetting.Builder()
         .name("no-clouds").description("Turn clouds off (Custom preset).").defaultValue(true).build());
 
-    private final Setting<Boolean> fastGraphics = sgGeneral.add(new BoolSetting.Builder()
-        .name("fast-graphics").description("Fast graphics mode (Custom preset).").defaultValue(true).build());
-
     private final Setting<Boolean> noShadows = sgGeneral.add(new BoolSetting.Builder()
         .name("no-entity-shadows").description("Skip the round shadow under entities (Custom preset).").defaultValue(true).build());
 
@@ -77,9 +73,8 @@ public class FpsBoost extends Module {
     // values before the module changed them
     private Integer oView, oSim, oBlend;
     private Double oEntity;
-    private ParticlesMode oParticles;
+    private Object oParticles;
     private CloudRenderMode oClouds;
-    private GraphicsMode oGraphics;
     private Boolean oShadows, oBob;
 
     private int baseView = 8;
@@ -101,7 +96,6 @@ public class FpsBoost extends Module {
         oEntity = o.getEntityDistanceScaling().getValue();
         oParticles = o.getParticles().getValue();
         oClouds = o.getCloudRenderMode().getValue();
-        oGraphics = o.getGraphicsMode().getValue();
         oShadows = o.getEntityShadows().getValue();
         oBob = o.getBobView().getValue();
         apply();
@@ -116,33 +110,45 @@ public class FpsBoost extends Module {
         o.getSimulationDistance().setValue(oSim);
         o.getBiomeBlendRadius().setValue(oBlend);
         o.getEntityDistanceScaling().setValue(oEntity);
-        o.getParticles().setValue(oParticles);
+        restore((SimpleOption) o.getParticles(), oParticles);
         o.getCloudRenderMode().setValue(oClouds);
-        o.getGraphicsMode().setValue(oGraphics);
         o.getEntityShadows().setValue(oShadows);
         o.getBobView().setValue(oBob);
         oView = null;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void setEnum(SimpleOption opt, String name) {
+        Object cur = opt.getValue();
+        if (!(cur instanceof Enum<?> e)) return;
+        for (Object c : e.getDeclaringClass().getEnumConstants()) {
+            if (((Enum<?>) c).name().equalsIgnoreCase(name)) { opt.setValue(c); return; }
+        }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void restore(SimpleOption opt, Object value) {
+        if (value != null) opt.setValue(value);
     }
 
     private void apply() {
         var o = mc.options;
         int view, sim;
         double ent;
-        boolean part, clouds, fast, shadows, bob, blend;
+        boolean part, clouds, shadows, bob, blend;
         switch (preset.get()) {
             case Balanced -> { view = 10; sim = 8; ent = 0.8; part = true; clouds = false; fast = false; shadows = true; bob = noBob.get(); blend = false; }
             case Aggressive -> { view = 8; sim = 6; ent = 0.6; part = true; clouds = true; fast = true; shadows = false; bob = true; blend = true; }
             case Potato -> { view = 5; sim = 5; ent = 0.5; part = true; clouds = true; fast = true; shadows = false; bob = true; blend = true; }
-            default -> { view = viewDistance.get(); sim = simDistance.get(); ent = entityDistance.get(); part = particlesMin.get(); clouds = noClouds.get(); fast = fastGraphics.get(); shadows = noShadows.get(); bob = noBob.get(); blend = lowerBlend.get(); }
+            default -> { view = viewDistance.get(); sim = simDistance.get(); ent = entityDistance.get(); part = particlesMin.get(); clouds = noClouds.get(); shadows = noShadows.get(); bob = noBob.get(); blend = lowerBlend.get(); }
         }
         baseView = view;
         curView = view;
         o.getViewDistance().setValue(view);
         o.getSimulationDistance().setValue(sim);
         o.getEntityDistanceScaling().setValue(ent);
-        if (part) o.getParticles().setValue(ParticlesMode.MINIMAL);
+        if (part) setEnum((SimpleOption) o.getParticles(), "MINIMAL");
         if (clouds) o.getCloudRenderMode().setValue(CloudRenderMode.OFF);
-        if (fast) o.getGraphicsMode().setValue(GraphicsMode.FAST);
         if (shadows) o.getEntityShadows().setValue(false);
         if (bob) o.getBobView().setValue(false);
         if (blend) o.getBiomeBlendRadius().setValue(0);

@@ -6,7 +6,7 @@ as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/
 ## v1.43.0 - FPS Boost For ZalithLauncher 2
 **What's new**
 - **New module: FPS Boost** (Visual category), made for phones running ZalithLauncher 2 with MobileGlues. Those setups are limited by the CPU and draw calls, so it lowers what the game draws and simulates:
-  - Presets: **Balanced**, **Aggressive** (default), **Potato** and **Custom** (view distance, simulation distance, entity distance, particles, clouds, graphics mode, entity shadows, view bobbing, biome blend).
+  - Presets: **Balanced**, **Aggressive** (default), **Potato** and **Custom** (view distance, simulation distance, entity distance, particles, clouds, entity shadows, view bobbing, biome blend).
   - **Auto Tune**: lowers the view distance when FPS stays under your target and raises it again when there is room, never below your minimum.
   - Your own settings are saved when you turn it on and restored when you turn it off.
 - It is generic for now. I do not know your phone model, so the presets are a good starting point and not tuned to one chip yet.
