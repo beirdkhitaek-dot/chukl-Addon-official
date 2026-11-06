@@ -367,7 +367,7 @@ public class SusChunkFinder extends Module {
 
     private final Setting<Boolean> deepAm = sgAm.add(new BoolSetting.Builder()
         .name("deep-amethyst")
-        .description("Draw boxes on fully grown amethyst clusters in a deep Y range (default Y -64 to -29), visible through walls. Only grown clusters, not buds. Overworld only. Grown clusters already count as evidence through the normal amethyst setting, so this only adds the boxes.")
+        .description("Draw boxes on fully grown amethyst clusters in a deep Y range (default Y -64 to 29), visible through walls. Only grown clusters, not buds. Overworld only. Grown clusters already count as evidence through the normal amethyst setting, so this only adds the boxes.")
         .defaultValue(true).build());
 
     private final Setting<Integer> amMinY = sgAm.add(new IntSetting.Builder()
@@ -376,7 +376,7 @@ public class SusChunkFinder extends Module {
 
     private final Setting<Integer> amMaxY = sgAm.add(new IntSetting.Builder()
         .name("amethyst-max-y").description("Highest Y that is checked.")
-        .defaultValue(-29).range(-64, 320).sliderRange(-64, 64).visible(deepAm::get).build());
+        .defaultValue(29).range(-64, 320).sliderRange(-64, 64).visible(deepAm::get).build());
 
     private final Setting<SettingColor> amColor = sgAm.add(new ColorSetting.Builder()
         .name("amethyst-color").description("Color of the amethyst boxes.")
@@ -413,6 +413,8 @@ public class SusChunkFinder extends Module {
 
     @Override
     public void onActivate() {
+        if (amMaxY.get() == -29) amMaxY.set(29); // the old default; the deep amethyst range now reaches Y 29
+
         lastAmSig = amSignature();
         restart();
     }
@@ -519,6 +521,17 @@ public class SusChunkFinder extends Module {
                 if (seenChunks.get(pos) != chunk) {
                     seenChunks.put(pos, chunk);
                     queue(chunk);
+                }
+            }
+        }
+
+        // A server can reveal blocks after the chunk arrived (anti-xray, late block updates): look at the nearby chunks again now and then
+        if (deepAm.get() && mc.player.age % 60 == 0) {
+            for (int dx = -4; dx <= 4; dx++) {
+                for (int dz = -4; dz <= 4; dz++) {
+                    if (!manager.isChunkLoaded(center.x + dx, center.z + dz)) continue;
+                    WorldChunk near = manager.getWorldChunk(center.x + dx, center.z + dz);
+                    if (near != null) queue(near);
                 }
             }
         }

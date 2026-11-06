@@ -3,6 +3,16 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.43.1 - Amethyst See-Through Up To Y 29
+**What's new**
+- **Both Sus Chunk Finder and Sus Chunk Finder Test** now box grown amethyst clusters from Y -64 up to **Y 29** (was -29), drawn through walls.
+- If your saved `amethyst-max-y` was still the old -29, it is raised to 29 when you turn the module on. Change it back if you want the old range.
+- **Servers that reveal blocks late** (anti-xray or delayed block updates): the chunks around you are now checked again every 3 seconds, so clusters that appear after the chunk loaded are still found.
+- Limit: if a server never sends the real block at all, no client can see it. The chat message "Deep amethyst: none found..." tells you when that may be the case.
+
+**How to use**
+- Nothing to switch on: `deep-amethyst` is on by default. Adjust `amethyst-min-y` / `amethyst-max-y`, color and alpha under Deep Amethyst. Replace the old jar with `chukl-addon-1.43.1.jar`.
+
 ## v1.43.0 - FPS Boost For ZalithLauncher 2
 **What's new**
 - **New module: FPS Boost** (Visual category), made for phones running ZalithLauncher 2 with MobileGlues. Those setups are limited by the CPU and draw calls, so it lowers what the game draws and simulates:
