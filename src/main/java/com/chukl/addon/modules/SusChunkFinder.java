@@ -390,7 +390,14 @@ public class SusChunkFinder extends Module {
         .name("amethyst-max-boxes").description("Most boxes drawn at once, nearest first. Lower = lighter for phones.")
         .defaultValue(150).range(10, 1000).sliderRange(10, 400).visible(deepAm::get).build());
 
+    private final Setting<Boolean> amNotice = sgAm.add(new BoolSetting.Builder()
+        .name("deep-layer-notice")
+        .description("Shows a message on screen when the server has not sent the deep layers around you yet, so you know why no clusters are shown. Clusters already found stay on screen after you go back up.")
+        .defaultValue(true).visible(deepAm::get).build());
+
     private final Map<ChunkPos, List<BlockPos>> amethystBlocks = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Every grown cluster ever seen in this world (client memory only), so boxes stay after you go back up. */
+    private final DeepAmethystMemory amMemory = new DeepAmethystMemory();
     private int lastAmSig;
     private int lastAmCount = -1;
     private boolean amHinted = false;
@@ -607,6 +614,7 @@ public class SusChunkFinder extends Module {
 
         if (result.amethyst().isEmpty()) amethystBlocks.remove(cp);
         else amethystBlocks.put(cp, result.amethyst());
+        amMemory.remember(world, cp, result.amethyst());
 
         if (!result.deepslate().isEmpty()) {
             chunkDeepslate.put(cp, result.deepslate());
@@ -945,6 +953,13 @@ public class SusChunkFinder extends Module {
     }
 
     @EventHandler
+    private void onDeepNotice(Render2DEvent event) {
+        if (!deepAm.get() || !amNotice.get() || mc.world == null || mc.player == null || mc.options.hudHidden) return;
+        if (!mc.world.getRegistryKey() == net.minecraft.world.World.OVERWORLD) return;
+        if (DeepAmethystMemory.deepLayersMissing(mc, amMinY.get(), amMaxY.get())) DeepAmethystMemory.drawNotice(event, mc);
+    }
+
+    @EventHandler
     private void onRender(Render3DEvent event) {
         if (mc.world == null || mc.player == null) return;
         anim.tick();
@@ -1022,12 +1037,12 @@ public class SusChunkFinder extends Module {
     /** Tells you in chat how many deep amethyst clusters were found, so you can tell "none here" from "the server hides them". */
     private void amethystStatus() {
         if (!deepAm.get() || mc.world == null || mc.world.getRegistryKey() != net.minecraft.world.World.OVERWORLD) return;
-        int n = 0;
-        for (List<BlockPos> l : amethystBlocks.values()) n += l.size();
+        amMemory.clearIfNewWorld(mc.world);
+        int n = amMemory.count();
         int lo = Math.min(amMinY.get(), amMaxY.get()), hi = Math.max(amMinY.get(), amMaxY.get());
         if (n != lastAmCount) {
             lastAmCount = n;
-            if (n > 0) info("Deep amethyst: " + n + " grown clusters in " + amethystBlocks.size() + " chunks (Y " + lo + " to " + hi + ").");
+            if (n > 0) info("Deep amethyst: " + n + " grown clusters remembered in " + amMemory.chunks() + " chunks (Y " + lo + " to " + hi + ").");
         }
         if (n == 0 && !amHinted && loadedChunks.size() >= 100) {
             amHinted = true;
@@ -1036,28 +1051,11 @@ public class SusChunkFinder extends Module {
         }
     }
 
-    /** Boxes on the grown amethyst clusters of the deep range, nearest first, drawn through walls. */
+    /** Boxes on every remembered grown cluster of the deep range, nearest first, drawn through walls. */
     private void renderAmethystEsp(Render3DEvent event) {
-        if (amethystBlocks.isEmpty()) return;
-        var manager = mc.world.getChunkManager();
-        ChunkPos here = mc.player.getChunkPos();
-        List<ChunkPos> list = new ArrayList<>(amethystBlocks.keySet());
-        list.sort(java.util.Comparator.comparingInt((ChunkPos c) ->
-            (c.x - here.x) * (c.x - here.x) + (c.z - here.z) * (c.z - here.z)));
-
         SettingColor base = amColor.get();
         Color fill = new Color(base.r, base.g, base.b, Math.max(1, Math.min(255, amAlpha.get())));
-        int cap = amMaxBoxes.get(), drawn = 0;
-        for (ChunkPos cp : list) {
-            if (!manager.isChunkLoaded(cp.x, cp.z)) continue;
-            List<BlockPos> blocks = amethystBlocks.get(cp);
-            if (blocks == null) continue;
-            for (BlockPos p : blocks) {
-                if (drawn >= cap) return;
-                event.renderer.box(p.getX(), p.getY(), p.getZ(), p.getX() + 1, p.getY() + 1, p.getZ() + 1, fill, fill, ShapeMode.Both, 0);
-                drawn++;
-            }
-        }
+        amMemory.render(event, mc, amMinY.get(), amMaxY.get(), fill, amMaxBoxes.get());
     }
 
     private void renderMarkers(Render3DEvent event) {

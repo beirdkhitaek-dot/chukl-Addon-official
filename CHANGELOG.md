@@ -3,6 +3,16 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.46.0 - Deep Amethyst Stays On Screen
+**What's new**
+- **Sus Chunk Finder and Sus Chunk Finder Test now remember every grown amethyst cluster they find.** The boxes stay on screen after you walk away or go back up, instead of disappearing when the layer is no longer near you. A cluster is only forgotten when you change world or you can see it was mined.
+- **New message when deep layers are not loaded:** some servers only send the layers below Y16 once you are down low. When that happens, the screen shows "Deep layers not loaded here, dig below Y 30 to load them", so you know why nothing is shown.
+- This only uses blocks the server already sent to your game. Nothing is requested from the server and nothing extra is sent.
+
+**How to use**
+- Nothing to set up: **deep-amethyst** is on by default. The message can be turned off with **deep-layer-notice** in the Deep Amethyst settings.
+- Dig down once so the deep layers load. The clusters found there stay boxed when you come back up.
+
 ## v1.45.0 - Auto Dig-Down Run And Deeper Server Watching
 **What's new**
 - **Auto dig-down run (Server Data Collector):** a new option that uses Baritone to dig straight down and stop every 16 blocks. At each stop it records which parts of the world the server sends you at that depth.
