@@ -3,6 +3,18 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.49.0 - Seed Explorer Uses /rtp
+**What's new**
+- **Seed Explorer can now use /rtp by itself.** If SeedcrackerX has collected nothing new for a while, it types /rtp, jumps to a new area and starts exploring from there.
+- **It handles the cooldown:** if the server says /rtp is on cooldown, it waits that long and tries again. After a successful jump it waits about a minute before the next one.
+- **It copes with the /rtp menu:** if /rtp opens a menu, it clicks the button you named. If no button matches, it lists the menu's buttons in chat so you can copy the right name.
+- It stops if the teleport leaves the overworld.
+
+**How to use**
+1. Turn on **seed-explorer**, then turn on **use-rtp** in its settings.
+2. **minutes-without-new-data** (default 8) is how long SeedcrackerX can find nothing new before it jumps.
+3. **rtp-menu-button** (default "overworld") is the name of the menu button to click. If it does not match, the explorer tells you what the buttons are called in chat.
+
 ## v1.48.0 - Seed Explorer For SeedcrackerX
 **What's new**
 - **New module: Seed Explorer.** A helper for the SeedcrackerX mod. SeedcrackerX finds the world seed from structures (igloos, desert pyramids, jungle temples, swamp huts, shipwrecks, pillager outposts, ocean monuments) that appear in the chunks your game loads. Seed Explorer uses Baritone to walk you outward in a square spiral so new chunks keep loading.
