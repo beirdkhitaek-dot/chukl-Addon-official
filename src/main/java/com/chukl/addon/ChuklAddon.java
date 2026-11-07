@@ -15,6 +15,7 @@ import com.chukl.addon.modules.KillBell;
 import com.chukl.addon.modules.KrispyChunkFinder;
 import com.chukl.addon.modules.ChuklSpawnerNotifier;
 import com.chukl.addon.modules.SeedFinder;
+import com.chukl.addon.modules.SeedExplorer;
 import com.chukl.addon.modules.ServerDataCollector;
 import com.chukl.addon.modules.SusChunkFinder;
 import com.chukl.addon.modules.SusChunkFinderTest;
@@ -71,6 +72,7 @@ public class ChuklAddon extends MeteorAddon {
         Modules.get().add(new GoodRoad());
         Modules.get().add(new SeedFinder());
         Modules.get().add(new ServerDataCollector());
+        Modules.get().add(new SeedExplorer());
 
         Modules.get().add(new FrostStorageEsp());
         Modules.get().add(new GoatBlockEsp());

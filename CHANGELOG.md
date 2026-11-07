@@ -3,6 +3,19 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.48.0 - Seed Explorer For SeedcrackerX
+**What's new**
+- **New module: Seed Explorer.** A helper for the SeedcrackerX mod. SeedcrackerX finds the world seed from structures (igloos, desert pyramids, jungle temples, swamp huts, shipwrecks, pillager outposts, ocean monuments) that appear in the chunks your game loads. Seed Explorer uses Baritone to walk you outward in a square spiral so new chunks keep loading.
+- It stops by itself when it is far enough from where you started, when your health is low, or when SeedcrackerX says it found the seed.
+- It can show SeedcrackerX's own progress in chat once a minute.
+
+**How to use**
+1. Install SeedcrackerX and set its server version to match the server.
+2. Stand where you want to start, in the overworld, and turn on **seed-explorer**.
+3. Let it walk. SeedcrackerX collects the structures and starts cracking by itself once it has enough data.
+4. Turn the module off any time to stop. Settings: **distance-between-stops** (160), **stop-after-blocks** (3000), **show-seedcracker-progress** (on).
+- It needs Baritone (comes with Meteor). Do not use it where walking around is not allowed.
+
 ## v1.47.0 - Faster And Lighter
 **What's new**
 - **Light ESP uses less power:** the list of chunks and the colors are no longer rebuilt every frame. This helps most on phones.
