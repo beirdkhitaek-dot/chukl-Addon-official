@@ -91,6 +91,12 @@ public class SusChunkFinderTest extends Module {
     private final SettingGroup sgHud = settings.createGroup("Target HUD");
     private final SettingGroup sgAm = settings.createGroup("Deep Amethyst");
 
+    /** Off by default: customers only see the few settings that matter. */
+    private final Setting<Boolean> advanced = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-advanced-settings")
+        .description("Shows every setting. The default settings work well on most servers, so leave this off unless you need to change something specific.")
+        .defaultValue(false).build());
+
     // --- General (same list and order as Krypton) ---
 
     private final Setting<Integer> simulationDistance = sgGeneral.add(new IntSetting.Builder()
@@ -104,7 +110,7 @@ public class SusChunkFinderTest extends Module {
 
     private final Setting<Integer> sensitivity = sgGeneral.add(new IntSetting.Builder()
         .name("sensitivity")
-        .description("Minimum number of unfinished growing things needed to mark a chunk as sus.")
+        .description("How easily a chunk gets marked. Lower = more chunks marked but more false alarms. Higher = fewer, more certain ones. 5 is a good start.")
         .defaultValue(5)
         .range(1, 20)
         .sliderRange(1, 20)
@@ -160,7 +166,7 @@ public class SusChunkFinderTest extends Module {
         .name("vines").description("Use vine growth.").defaultValue(false).build());
 
     private final Setting<Boolean> amethyst = sgGeneral.add(new BoolSetting.Builder()
-        .name("amethyst").description("Use amethyst bud and cluster growth.").defaultValue(true).build());
+        .name("amethyst").description("Look for amethyst that grew where nobody should have loaded the chunk. This is the main clue that a base is close.").defaultValue(true).build());
 
     private final Setting<Boolean> bamboo = sgGeneral.add(new BoolSetting.Builder()
         .name("bamboo").description("Use bamboo growth.").defaultValue(false).build());
@@ -349,7 +355,7 @@ public class SusChunkFinderTest extends Module {
 
     private final Setting<Boolean> deepAm = sgAm.add(new BoolSetting.Builder()
         .name("deep-amethyst")
-        .description("Look for fully grown amethyst clusters in a deep Y range (default Y -64 to 29). Only grown clusters count, not buds. Overworld only.")
+        .description("Look for fully grown amethyst clusters deep underground (Y -64 to 29). More grown clusters make a chunk rank higher as a base. Overworld only. The server has to send those layers first: dig below Y 30 if nothing shows.")
         .defaultValue(true).build());
 
     private final Setting<Integer> amMinY = sgAm.add(new IntSetting.Builder()
@@ -408,7 +414,7 @@ public class SusChunkFinderTest extends Module {
 
     private final Setting<Boolean> announceBest = sgRender.add(new BoolSetting.Builder()
         .name("announce-best")
-        .description("Print the coordinates of the best dig spot in chat when it changes.")
+        .description("Tells you in chat where to dig whenever the best chunk changes.")
         .defaultValue(true)
         .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
         .build()
@@ -416,8 +422,7 @@ public class SusChunkFinderTest extends Module {
 
     private final Setting<Boolean> avoidNatural = sgRender.add(new BoolSetting.Builder()
         .name("avoid-natural")
-        .description("Never pick a chunk that probably has a natural cause: inside or next to a natural structure (mineshaft, stronghold, dungeon, ancient city, trial chamber, geode), "
-            + "or lit only by light next to lava. A chunk with very strong evidence is still allowed. If every candidate looks natural, nothing is shown.")
+        .description("Skips chunks that probably have a natural cause, like a mineshaft, stronghold or geode, so you do not dig in the wrong place.")
         .defaultValue(true)
         .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
         .build()
@@ -525,7 +530,7 @@ public class SusChunkFinderTest extends Module {
 
     private final Setting<Boolean> tracers = sgRender.add(new BoolSetting.Builder()
         .name("tracers")
-        .description("Draw a line from your crosshair to the best chunk.")
+        .description("Draws a line from your crosshair to the best chunk so you can follow it.")
         .defaultValue(true)
         .visible(() -> renderMode.get() == RenderMode.Best_Chunks)
         .build()
@@ -638,7 +643,7 @@ public class SusChunkFinderTest extends Module {
     );
 
     private final Setting<Boolean> hudOn = sgHud.add(new BoolSetting.Builder()
-        .name("target-hud").description("Show details about the sus chunk you are looking at.")
+        .name("target-hud").description("Shows a small panel with details about the marked chunk you are looking at.")
         .defaultValue(true).build());
 
     private final Setting<Integer> hudOpacity = sgHud.add(new IntSetting.Builder()
@@ -708,7 +713,7 @@ public class SusChunkFinderTest extends Module {
 
     private final Setting<Boolean> ugDetect = sgUg.add(new BoolSetting.Builder()
         .name("underground-detection")
-        .description("Scan the underground height range for blocks that do not generate there naturally (chests, furnaces, beds, ...). Chunks with enough of them are flagged and ranked higher.")
+        .description("Looks underground (Y -64 to 29) for things players place: chests, furnaces, beds, redstone. Chunks with enough of them are marked as a base.")
         .defaultValue(true)
         .build()
     );
@@ -1050,13 +1055,16 @@ public class SusChunkFinderTest extends Module {
     private final Map<ChunkPos, WorldChunk> seenChunks = new java.util.HashMap<>();
 
     public SusChunkFinderTest() {
-        super(ChuklAddon.CATEGORY, "chukl-sus-chunk-test", "TEST copy of Sus Chunk Finder: renders only the best chunk(s) as a dig-down column + beam, and scans Y29 to -64 for player-made blocks.");
+        super(ChuklAddon.CATEGORY, "chukl-sus-chunk-test", "Shows the ONE best chunk to dig at, with a glowing orb, a beam and a dig shaft. Follow the line from your crosshair and dig down. The coordinates go to chat.");
+        SimpleMode.apply(advanced, java.util.Set.of("show-advanced-settings", "sensitivity", "amethyst", "underground-detection", "announce-best", "avoid-natural", "tracers", "deep-amethyst", "amethyst-esp", "amethyst-color", "deep-layer-notice", "target-hud"), settings);
     }
 
     @Override
     public void onActivate() {
         if (amMaxY.get() == -29) amMaxY.set(29); // the old default; the deep amethyst range now reaches Y 29
 
+        info("This shows ONE best chunk to dig at. Follow the beam and the line from your crosshair, then dig straight down the shaft. The coordinates are sent to chat.");
+        info("Purple boxes are fully grown amethyst clusters. 'Deep layers not loaded here' means: dig below Y 30. More options: 'Show Advanced Settings'.");
         restart();
     }
 

@@ -67,8 +67,14 @@ public class SusChunkFinder extends Module {
     private final SettingGroup sgHud = settings.createGroup("Target HUD");
     private final SettingGroup sgAm = settings.createGroup("Deep Amethyst");
 
+    /** Off by default: customers only see the few settings that matter. */
+    private final Setting<Boolean> advanced = sgGeneral.add(new BoolSetting.Builder()
+        .name("show-advanced-settings")
+        .description("Shows every setting. The default settings work well on most servers, so leave this off unless you need to change something specific.")
+        .defaultValue(false).build());
+
     private final Setting<Boolean> hudOn = sgHud.add(new BoolSetting.Builder()
-        .name("target-hud").description("Show details about the sus chunk you are looking at.")
+        .name("target-hud").description("Shows a small panel with details about the marked chunk you are looking at.")
         .defaultValue(true).build());
 
     private final Setting<Integer> hudOpacity = sgHud.add(new IntSetting.Builder()
@@ -102,7 +108,7 @@ public class SusChunkFinder extends Module {
 
     private final Setting<Integer> sensitivity = sgGeneral.add(new IntSetting.Builder()
         .name("sensitivity")
-        .description("Minimum number of unfinished growing things needed to mark a chunk as sus.")
+        .description("How easily a chunk gets marked. Lower = more chunks marked but more false alarms. Higher = fewer, more certain ones. 5 is a good start.")
         .defaultValue(5)
         .range(1, 20)
         .sliderRange(1, 20)
@@ -134,7 +140,7 @@ public class SusChunkFinder extends Module {
 
     private final Setting<Boolean> notifyZones = sgGeneral.add(new BoolSetting.Builder()
         .name("notify-zones")
-        .description("Smart mode: prints the coordinates in chat when a new high-confidence zone is found.")
+        .description("Prints the coordinates in chat when a strong base is found.")
         .defaultValue(false)
         .visible(smartAdjustment::get)
         .build()
@@ -159,7 +165,7 @@ public class SusChunkFinder extends Module {
         .name("vines").description("Use vine growth.").defaultValue(false).build());
 
     private final Setting<Boolean> amethyst = sgGeneral.add(new BoolSetting.Builder()
-        .name("amethyst").description("Use amethyst bud and cluster growth.").defaultValue(true).build());
+        .name("amethyst").description("Look for amethyst that grew where nobody should have loaded the chunk. This is the main clue that a base is close.").defaultValue(true).build());
 
     private final Setting<Boolean> bamboo = sgGeneral.add(new BoolSetting.Builder()
         .name("bamboo").description("Use bamboo growth.").defaultValue(false).build());
@@ -367,7 +373,7 @@ public class SusChunkFinder extends Module {
 
     private final Setting<Boolean> deepAm = sgAm.add(new BoolSetting.Builder()
         .name("deep-amethyst")
-        .description("Draw boxes on fully grown amethyst clusters in a deep Y range (default Y -64 to 29), visible through walls. Only grown clusters, not buds. Overworld only. Grown clusters already count as evidence through the normal amethyst setting, so this only adds the boxes.")
+        .description("Draws boxes through walls on fully grown amethyst clusters deep underground (Y -64 to 29). Overworld only. The server has to send those layers first: dig below Y 30 if nothing shows.")
         .defaultValue(true).build());
 
     private final Setting<Integer> amMinY = sgAm.add(new IntSetting.Builder()
@@ -415,7 +421,8 @@ public class SusChunkFinder extends Module {
     private final Map<ChunkPos, WorldChunk> seenChunks = new java.util.HashMap<>();
 
     public SusChunkFinder() {
-        super(ChuklAddon.CATEGORY, "chukl-sus-chunk", "Finds probable base locations using plant/amethyst growth and rotated deepslate.");
+        super(ChuklAddon.CATEGORY, "chukl-sus-chunk", "Finds probable player bases. Walk around: colored squares on the ground mark chunks where a base is probably close. Dig down under the strongest one.");
+        SimpleMode.apply(advanced, java.util.Set.of("show-advanced-settings", "sensitivity", "amethyst", "notify-zones", "target-hud", "deep-amethyst", "amethyst-color", "deep-layer-notice"), settings);
     }
 
     @Override
@@ -423,6 +430,8 @@ public class SusChunkFinder extends Module {
         if (amMaxY.get() == -29) amMaxY.set(29); // the old default; the deep amethyst range now reaches Y 29
 
         lastAmSig = amSignature();
+        info("Walk around. Colored squares on the ground mark chunks where a player base is probably close. Dig down under the strongest one.");
+        info("Purple boxes (seen through walls) are fully grown amethyst clusters. Want more options? Turn on 'Show Advanced Settings'.");
         restart();
     }
 

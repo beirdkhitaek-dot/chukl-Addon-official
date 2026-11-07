@@ -3,6 +3,20 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.50.0 - Simple Sus Chunk Settings
+**What's new**
+- **Sus Chunk Finder and Sus Chunk Finder Test now show only the few settings that matter.** The rest are hidden until you turn on **Show Advanced Settings** (off by default). Nothing was removed and nothing you set before was reset. Hidden settings keep working.
+- **Plain-language descriptions** for the main settings (sensitivity, amethyst, underground detection, tracers and more).
+- **A short how-to appears in chat when you turn the module on**, so you know what you are looking at and what to do next.
+- Clearer module descriptions in the module list.
+
+**How to use**
+- **Sus Chunk Finder:** turn it on and walk around. Colored squares on the ground mark chunks where a player base is probably close. Dig down under the strongest one. Purple boxes seen through walls are fully grown amethyst clusters.
+- **Sus Chunk Finder Test:** turn it on. It shows ONE best chunk to dig at: follow the beam and the line from your crosshair, then dig straight down the shaft. The coordinates are sent to chat.
+- If you see "Deep layers not loaded here, dig below Y 30 to load them", dig down once. The deep layers load and the clusters appear.
+- Marks too many chunks? Raise **sensitivity**. Marks too few? Lower it.
+- Want colors, sizes, light or animation options? Turn on **Show Advanced Settings**.
+
 ## v1.49.0 - Seed Explorer Uses /rtp
 **What's new**
 - **Seed Explorer can now use /rtp by itself.** If SeedcrackerX has collected nothing new for a while, it types /rtp, jumps to a new area and starts exploring from there.
