@@ -149,6 +149,7 @@ public class ServerDataCollector extends Module {
     private boolean autoFinished = false;
     private final List<Integer> stops = new ArrayList<>();
     private final List<String> digResults = new ArrayList<>();
+    private final List<int[]> digStats = new ArrayList<>(); // {targetY, playerY, chunksWithDeepBlocks, chunksLoaded}
     private int stopIndex = 0, autoTicks = 0, stuckTicks = 0, retries = 0;
     private BlockPos startPos = BlockPos.ORIGIN;
     private final AtomicLong oresDeep = new AtomicLong(), oresDeepBuried = new AtomicLong();
@@ -181,7 +182,7 @@ public class ServerDataCollector extends Module {
         resetBlockStats();
         auto = Auto.OFF;
         autoFinished = false;
-        digResults.clear();
+        digResults.clear(); digStats.clear();
         info("Writing to: " + ResearchFiles.folder().getAbsolutePath() + " (server-data-" + ResearchFiles.serverName() + ".jsonl)");
     }
 
@@ -342,7 +343,7 @@ public class ServerDataCollector extends Module {
         }
         startPos = mc.player.getBlockPos();
         stops.clear();
-        digResults.clear();
+        digResults.clear(); digStats.clear();
         int floor = Math.floorDiv(startPos.getY() - 1, 16) * 16;
         for (int y = floor; y > digTo.get(); y -= 16) stops.add(y);
         stops.add(digTo.get());
@@ -361,8 +362,26 @@ public class ServerDataCollector extends Module {
         if (stopIndex == 0 && retries == 0) info("Digging down to Y " + target + " ...");
     }
 
+    /** One plain sentence about where the server started sending the deep layers (below Y16). */
+    private String digVerdict() {
+        if (digStats.isEmpty()) return "";
+        int firstWith = Integer.MIN_VALUE, lastWithout = Integer.MIN_VALUE;
+        boolean found = false;
+        for (int[] d : digStats) {
+            if (d[2] > 0) { firstWith = d[1]; found = true; break; }
+            lastWithout = d[1];
+        }
+        int lowest = digStats.get(digStats.size() - 1)[1];
+        if (!found) return "The server never sent the deep layers (below Y16), even at Y " + lowest + ". They look permanently hidden.";
+        if (lastWithout == Integer.MIN_VALUE) return "The deep layers were already there at the start (Y " + firstWith + "), so this server does not hide them.";
+        return "The server sent the deep layers once you reached about Y " + firstWith + ". At Y " + lastWithout
+            + " it had not sent them yet, so the cutoff is between those two levels.";
+    }
+
     private void finishAuto() {
         recordSummaryLine();
+        String verdict = digVerdict();
+        if (!verdict.isEmpty()) info("Result: " + verdict);
         if (returnToStart.get()) {
             auto = Auto.RETURNING;
             autoTicks = 0; stuckTicks = 0;
@@ -418,6 +437,7 @@ public class ServerDataCollector extends Module {
                 ? mc.getNetworkHandler().getPlayerListEntry(mc.player.getUuid()).getLatency() : -1);
             sb.append('}');
             ResearchFiles.appendLine("server-data-" + ResearchFiles.serverName() + ".jsonl", sb.toString());
+            digStats.add(new int[]{target, y, withDeep, loaded});
             digResults.add("Y " + y + " (stop at " + target + "): " + withDeep + " of " + loaded + " chunks around you have blocks below Y16; your chunk: " + map);
         } catch (Throwable t) {
             warning("Could not record stop: " + t.getMessage());
@@ -734,6 +754,7 @@ public class ServerDataCollector extends Module {
             }
             if (!digResults.isEmpty()) {
                 t.append("\nAuto dig-down run:\n");
+                t.append("  result: ").append(digVerdict()).append('\n');
                 for (String s : digResults) t.append("  ").append(s).append('\n');
             }
             java.nio.file.Files.writeString(new java.io.File(ResearchFiles.folder(), "server-summary-" + ResearchFiles.serverName() + ".txt").toPath(), t.toString());

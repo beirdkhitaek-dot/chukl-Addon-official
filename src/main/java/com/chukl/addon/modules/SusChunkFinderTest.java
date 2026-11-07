@@ -92,6 +92,8 @@ public class SusChunkFinderTest extends Module {
     private final SettingGroup sgAm = settings.createGroup("Deep Amethyst");
 
     /** Off by default: customers only see the few settings that matter. */
+    private final ChatCoach coach = new ChatCoach();
+    private int coachTicks = 0;
     private final Setting<Boolean> advanced = sgGeneral.add(new BoolSetting.Builder()
         .name("show-advanced-settings")
         .description("Shows every setting. The default settings work well on most servers, so leave this off unless you need to change something specific.")
@@ -1063,6 +1065,7 @@ public class SusChunkFinderTest extends Module {
     public void onActivate() {
         if (amMaxY.get() == -29) amMaxY.set(29); // the old default; the deep amethyst range now reaches Y 29
 
+        coach.reset();
         info("This shows ONE best chunk to dig at. Follow the beam and the line from your crosshair, then dig straight down the shaft. The coordinates are sent to chat.");
         info("Purple boxes are fully grown amethyst clusters. 'Deep layers not loaded here' means: dig below Y 30. More options: 'Show Advanced Settings'.");
         restart();
@@ -1583,6 +1586,11 @@ public class SusChunkFinderTest extends Module {
             return;
         }
 
+        if (++coachTicks >= 20) { // once a second
+            coachTicks = 0;
+            coach.tick(mc, !susChunks.isEmpty(), sensitivity.get(), m -> info(m));
+        }
+
         scanNewChunks();
         probeHidden();
 
@@ -1734,8 +1742,9 @@ public class SusChunkFinderTest extends Module {
                 if (z.level() < 2) continue;
                 long key = ChunkPos.toLong((int) Math.floor(z.centerX() / 64), (int) Math.floor(z.centerZ() / 64));
                 if (notifiedZones.add(key)) {
-                    info("High-confidence sus zone at " + (int) z.centerX() + ", " + (int) z.centerZ()
-                        + " (" + z.size() + " chunk" + (z.size() == 1 ? "" : "s") + ", heat " + z.maxHeat() + ")");
+                    info("Strong base zone at X " + (int) z.centerX() + ", Z " + (int) z.centerZ()
+                        + " (" + ChatCoach.where(mc.player, z.centerX(), z.centerZ()) + "): " + z.size() + " chunk"
+                        + (z.size() == 1 ? "" : "s") + ", heat " + z.maxHeat() + ". Dig down under it.");
                 }
             }
         }
@@ -2169,8 +2178,10 @@ public class SusChunkFinderTest extends Module {
             pinnedTarget = null;
             if (announceBest.get() && renderMode.get() == RenderMode.Best_Chunks) {
                 BlockPos t = digTarget(pick);
-                info("Best dig spot: X " + t.getX() + "  Z " + t.getZ() + "  (chunk " + pick.x + ", " + pick.z
-                    + ", score " + (int) rank(pick, levels) + ", underground " + effUg(pick) + ")");
+                int clusters = amethystBlocks.getOrDefault(pick, List.of()).size();
+                String why = "underground score " + effUg(pick) + (clusters > 0 ? ", " + clusters + " grown amethyst" : "");
+                info("Best dig spot: X " + t.getX() + ", Z " + t.getZ() + " (" + ChatCoach.where(mc.player, t.getX(), t.getZ())
+                    + "). Why: " + why + ". Follow the beam and dig down the shaft.");
             }
         }
 

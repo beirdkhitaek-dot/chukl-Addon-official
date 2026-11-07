@@ -3,6 +3,17 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.51.0 - Smarter Chat Help
+**What's new**
+- **Sus Chunk Finder and Sus Chunk Finder Test tell you where things are:** messages now say how far away a spot is and in which direction, for example "Strong base zone at X 1200, Z -300 (420 blocks NE)". The best dig spot message says why it was picked. **notify-zones** is now on by default.
+- **Helpful tips when nothing is found:** if nothing is marked for a while, the module tells you what to try (walk around, explore away from spawn, lower the sensitivity). At most 4 tips, never spam.
+- **Server Data Collector:** the auto dig run now ends with one plain sentence about where the server started sending the deep layers, and puts it in the summary file.
+- **Seed Explorer:** a short status line every 2 minutes (which stop, how far from the start, how long since SeedcrackerX last collected something new).
+
+**How to use**
+- Nothing to set up. Turn the modules on as before and read the chat for what to do next.
+- Do not want the zone messages? Turn off **notify-zones** in Sus Chunk Finder.
+
 ## v1.50.0 - Simple Sus Chunk Settings
 **What's new**
 - **Sus Chunk Finder and Sus Chunk Finder Test now show only the few settings that matter.** The rest are hidden until you turn on **Show Advanced Settings** (off by default). Nothing was removed and nothing you set before was reset. Hidden settings keep working.

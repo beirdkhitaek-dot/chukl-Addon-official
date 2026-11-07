@@ -82,6 +82,7 @@ public class SeedExplorer extends Module {
     private BlockPos origin = BlockPos.ORIGIN;
     private int index = 0, stuckTicks = 0, retries = 0, waitTicks = 0, progressTicks = 0;
     private boolean moving = false;
+    private long lastStatusAt = 0;
     private int[] target = {0, 0};
 
     public SeedExplorer() {
@@ -107,7 +108,7 @@ public class SeedExplorer extends Module {
         }
         origin = mc.player.getBlockPos();
         index = 0; stuckTicks = 0; retries = 0; waitTicks = 40; progressTicks = 0; moving = false;
-        rtp = Rtp.NONE; nextRtpAt = 0; lastProgressAt = System.currentTimeMillis();
+        rtp = Rtp.NONE; nextRtpAt = 0; lastProgressAt = System.currentTimeMillis(); lastStatusAt = lastProgressAt;
         latestProgress = ""; prevProgress = ""; menuListed = false;
         info("Seed Explorer started. It walks a square spiral around this spot, stopping every "
             + stepSize.get() + " blocks to let chunks load. Turn the module off to stop.");
@@ -158,6 +159,14 @@ public class SeedExplorer extends Module {
         }
 
         long now = System.currentTimeMillis();
+        if (now - lastStatusAt >= 120_000L) { // a short status line every 2 minutes
+            lastStatusAt = now;
+            double sx = mc.player.getX() - origin.getX(), sz = mc.player.getZ() - origin.getZ();
+            long quiet = (now - lastProgressAt) / 60_000L;
+            info("Status: stop " + (index + 1) + ", " + (int) Math.sqrt(sx * sx + sz * sz) + " blocks from the start"
+                + (quiet >= 1 ? ", " + quiet + " min since SeedcrackerX last collected something new." : ", SeedcrackerX is still collecting.")
+                + (useRtp.get() ? "" : " Turn on use-rtp to jump to a new area when it stalls."));
+        }
         if ((showProgress.get() || useRtp.get()) && rtp == Rtp.NONE
             && FabricLoader.getInstance().isModLoaded("seedcrackerx") && ++progressTicks >= 20 * 60) {
             progressTicks = 0;

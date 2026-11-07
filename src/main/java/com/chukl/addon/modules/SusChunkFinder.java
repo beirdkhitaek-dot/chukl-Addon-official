@@ -68,6 +68,8 @@ public class SusChunkFinder extends Module {
     private final SettingGroup sgAm = settings.createGroup("Deep Amethyst");
 
     /** Off by default: customers only see the few settings that matter. */
+    private final ChatCoach coach = new ChatCoach();
+    private int coachTicks = 0;
     private final Setting<Boolean> advanced = sgGeneral.add(new BoolSetting.Builder()
         .name("show-advanced-settings")
         .description("Shows every setting. The default settings work well on most servers, so leave this off unless you need to change something specific.")
@@ -141,7 +143,7 @@ public class SusChunkFinder extends Module {
     private final Setting<Boolean> notifyZones = sgGeneral.add(new BoolSetting.Builder()
         .name("notify-zones")
         .description("Prints the coordinates in chat when a strong base is found.")
-        .defaultValue(false)
+        .defaultValue(true)
         .visible(smartAdjustment::get)
         .build()
     );
@@ -430,6 +432,7 @@ public class SusChunkFinder extends Module {
         if (amMaxY.get() == -29) amMaxY.set(29); // the old default; the deep amethyst range now reaches Y 29
 
         lastAmSig = amSignature();
+        coach.reset();
         info("Walk around. Colored squares on the ground mark chunks where a player base is probably close. Dig down under the strongest one.");
         info("Purple boxes (seen through walls) are fully grown amethyst clusters. Want more options? Turn on 'Show Advanced Settings'.");
         restart();
@@ -797,6 +800,11 @@ public class SusChunkFinder extends Module {
             return;
         }
 
+        if (++coachTicks >= 20) { // once a second
+            coachTicks = 0;
+            coach.tick(mc, !susChunks.isEmpty(), sensitivity.get(), m -> info(m));
+        }
+
         scanNewChunks();
 
         if (mc.player.age % 100 == 50) amethystStatus();
@@ -897,8 +905,9 @@ public class SusChunkFinder extends Module {
                 if (z.level() < 2) continue;
                 long key = ChunkPos.toLong((int) Math.floor(z.centerX() / 64), (int) Math.floor(z.centerZ() / 64));
                 if (notifiedZones.add(key)) {
-                    info("High-confidence sus zone at " + (int) z.centerX() + ", " + (int) z.centerZ()
-                        + " (" + z.size() + " chunk" + (z.size() == 1 ? "" : "s") + ", heat " + z.maxHeat() + ")");
+                    info("Strong base zone at X " + (int) z.centerX() + ", Z " + (int) z.centerZ()
+                        + " (" + ChatCoach.where(mc.player, z.centerX(), z.centerZ()) + "): " + z.size() + " chunk"
+                        + (z.size() == 1 ? "" : "s") + ", heat " + z.maxHeat() + ". Dig down under it.");
                 }
             }
         }
