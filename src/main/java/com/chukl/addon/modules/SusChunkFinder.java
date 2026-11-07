@@ -422,6 +422,13 @@ public class SusChunkFinder extends Module {
     private int timer;
     private final Map<ChunkPos, WorldChunk> seenChunks = new java.util.HashMap<>();
 
+    // Render cache: the plate list is rebuilt about 4 times a second instead of every frame
+    private Map<ChunkPos, Integer> cachedTargets = Map.of();
+    private Map<ChunkPos, Integer> cachedFrom;
+    private ChunkPos cachedHere;
+    private long cachedAt;
+    private int rescanCursor;
+
     public SusChunkFinder() {
         super(ChuklAddon.CATEGORY, "chukl-sus-chunk", "Finds probable player bases. Walk around: colored squares on the ground mark chunks where a base is probably close. Dig down under the strongest one.");
         SimpleMode.apply(advanced, java.util.Set.of("show-advanced-settings", "sensitivity", "amethyst", "notify-zones", "target-hud", "deep-amethyst", "amethyst-color", "deep-layer-notice"), settings);
@@ -458,13 +465,14 @@ public class SusChunkFinder extends Module {
 
         // One single-thread executor per worker. A given chunk always goes to the same worker, so two
         // scans of the same chunk can never run at once, while different chunks scan in parallel.
-        int count = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors()));
+        int count = Math.max(1, Math.min(3, Runtime.getRuntime().availableProcessors() / 4)); // 2 on an 8-core phone: leaves the game its cores
         executors = new ExecutorService[count];
         for (int i = 0; i < count; i++) {
             int id = i;
             executors[i] = Executors.newSingleThreadExecutor(r -> {
                 Thread t = new Thread(r, "SusChunkFinder-Scan-" + id);
                 t.setDaemon(true);
+                t.setPriority(Thread.MIN_PRIORITY);
                 return t;
             });
         }
@@ -528,6 +536,7 @@ public class SusChunkFinder extends Module {
         var manager = mc.world.getChunkManager();
         ChunkPos center = mc.player.getChunkPos();
         int radius = mc.options.getViewDistance().getValue() + (smartAdjustment.get() ? 0 : 2);
+        int budget = 16; // new chunks handed to the workers per pass
 
         for (int cx = center.x - radius; cx <= center.x + radius; cx++) {
             for (int cz = center.z - radius; cz <= center.z + radius; cz++) {
@@ -538,6 +547,8 @@ public class SusChunkFinder extends Module {
 
                 ChunkPos pos = new ChunkPos(cx, cz);
                 if (seenChunks.get(pos) != chunk) {
+                    if (budget <= 0) continue; // the rest is taken on the next pass, so a join never floods a weak CPU
+                    budget--;
                     seenChunks.put(pos, chunk);
                     queue(chunk);
                 }
@@ -545,14 +556,16 @@ public class SusChunkFinder extends Module {
         }
 
         // A server can reveal blocks after the chunk arrived (anti-xray, late block updates): look at the nearby chunks again now and then
+        // Rotates through the 9x9 area, 12 chunks per pass (a full round about every 20 seconds), instead of all 81 at once
         if (deepAm.get() && mc.player.age % 60 == 0) {
-            for (int dx = -4; dx <= 4; dx++) {
-                for (int dz = -4; dz <= 4; dz++) {
-                    if (!manager.isChunkLoaded(center.x + dx, center.z + dz)) continue;
-                    WorldChunk near = manager.getWorldChunk(center.x + dx, center.z + dz);
-                    if (near != null) queue(near);
-                }
+            for (int i = 0; i < 12; i++) {
+                int k = (rescanCursor + i) % 81;
+                int dx = k / 9 - 4, dz = k % 9 - 4;
+                if (!manager.isChunkLoaded(center.x + dx, center.z + dz)) continue;
+                WorldChunk near = manager.getWorldChunk(center.x + dx, center.z + dz);
+                if (near != null) queue(near);
             }
+            rescanCursor = (rescanCursor + 12) % 81;
         }
 
         // Forget unloaded chunks so they get scanned again when they come back
@@ -805,14 +818,14 @@ public class SusChunkFinder extends Module {
             coach.tick(mc, !susChunks.isEmpty(), sensitivity.get(), m -> info(m));
         }
 
-        scanNewChunks();
+        if (mc.player.age % 4 == 0) scanNewChunks();
 
         if (mc.player.age % 100 == 50) amethystStatus();
 
         if (debugInfo.get() && mc.player.age % 40 == 0) printDebug();
 
         if (--timer > 0) return;
-        timer = 2; // refresh the sus list every other tick
+        timer = 5; // refresh the sus list a few times a second (every other tick was too heavy for phones)
 
         ClientWorld world = mc.world;
         int minSensitivity = effectiveSensitivity();
@@ -999,7 +1012,12 @@ public class SusChunkFinder extends Module {
             int sens = Math.max(1, sensitivity.get());
             Map<ChunkPos, Integer> levels = susLevel;
 
-            Map<ChunkPos, Integer> targets = new java.util.HashMap<>();
+            long nowMs = System.currentTimeMillis();
+            Map<ChunkPos, Integer> targets;
+            if (chunks == cachedFrom && here.equals(cachedHere) && nowMs - cachedAt < 250) {
+                targets = cachedTargets;
+            } else {
+            targets = new java.util.HashMap<>();
             for (Map.Entry<ChunkPos, Integer> entry : chunks.entrySet()) {
                 ChunkPos cp = entry.getKey();
 
@@ -1015,6 +1033,11 @@ public class SusChunkFinder extends Module {
                     a = Math.max(10, (int) (baseAlpha * strength));
                 }
                 targets.put(cp, a);
+            }
+            cachedTargets = targets;
+            cachedFrom = chunks;
+            cachedHere = here;
+            cachedAt = nowMs;
             }
             // one rounded plate per chunk (never two on top of each other), fading in and out
             for (SusAnim.Plate pl : anim.plates(targets, animations.get(), fadeSeconds.get())) {

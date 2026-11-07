@@ -1,6 +1,7 @@
 package com.chukl.addon.modules;
 
 import com.chukl.addon.ChuklAddon;
+import com.chukl.addon.seed.DungeonSeedCheck;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
@@ -11,7 +12,9 @@ import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
+import meteordevelopment.meteorclient.settings.StringSetting;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.render.RenderUtils;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
@@ -81,6 +84,13 @@ public class ChuklSpawnerNotifier extends Module {
         .description("Also flag a spawner inside a natural structure when its mob does not belong there (for example a pig in a dungeon). Leave off if your server changes or hides spawner mobs.")
         .defaultValue(false)
         .visible(checkSurroundings::get)
+        .build()
+    );
+
+    private final Setting<String> worldSeed = sgGeneral.add(new StringSetting.Builder()
+        .name("world-seed")
+        .description("Optional. The seed of the world (a number, or any text). With it, a dungeon spawner that stands exactly where the world generated one is always counted as natural, even if its room was damaged. It learns from the natural dungeons you find, and tells you in chat if the seed looks wrong. Leave empty to use the seed from Sus Chunk Finder Test, or none. Overworld only.")
+        .defaultValue("")
         .build()
     );
 
@@ -249,6 +259,12 @@ public class ChuklSpawnerNotifier extends Module {
     private ClientWorld lastWorld;
     private int timer;
 
+    // seed check (see DungeonSeedCheck)
+    private final DungeonSeedCheck seedCheck = new DungeonSeedCheck();
+    private String appliedSeed;
+    private String lastServer;
+    private boolean cacheDirty;
+
     public ChuklSpawnerNotifier() {
         super(ChuklAddon.CATEGORY, "chukl-spawner-notifier",
             "Detects unnatural / player-placed spawners, tells you the mob and marks them with a colored lightning beam.");
@@ -257,7 +273,13 @@ public class ChuklSpawnerNotifier extends Module {
     @Override
     public void onActivate() {
         reset();
+        appliedSeed = null;
         lastWorld = mc.world;
+    }
+
+    @Override
+    public String getInfoString() {
+        return seedCheck.shortStatus();
     }
 
     @Override
@@ -283,10 +305,23 @@ public class ChuklSpawnerNotifier extends Module {
         if (mc.world != lastWorld) {
             reset();
             lastWorld = mc.world;
+
+            var entry = mc.getCurrentServerEntry();
+            String server = entry != null ? entry.address : "singleplayer";
+            if (!server.equals(lastServer)) {
+                lastServer = server;
+                appliedSeed = null; // another server = another seed, learn again
+            }
         }
 
         if (++timer < 20) return; // once a second is plenty
         timer = 0;
+
+        syncSeed();
+        if (cacheDirty) { // the seed check just calibrated: judge every spawner again with it
+            cache.clear();
+            cacheDirty = false;
+        }
 
         ClientWorld world = mc.world;
         var manager = world.getChunkManager();
@@ -339,6 +374,32 @@ public class ChuklSpawnerNotifier extends Module {
             return dx * dx + dz * dz;
         }));
         shown = list;
+    }
+
+    /** Applies the seed typed in the settings (or the one from Sus Chunk Finder Test when this one is empty). */
+    private void syncSeed() {
+        String text = worldSeed.get();
+        if (text == null || text.trim().isEmpty()) {
+            text = "";
+            SusChunkFinderTest other = Modules.get().get(SusChunkFinderTest.class);
+            if (other != null) {
+                Long fromOther = other.getWorldSeed();
+                if (fromOther != null) text = String.valueOf(fromOther);
+            }
+        }
+        text = text.trim();
+        if (text.equals(appliedSeed)) return;
+
+        appliedSeed = text;
+        seedCheck.setSeed(DungeonSeedCheck.parseSeed(text));
+        cache.clear();
+        if (seedCheck.hasSeed()) {
+            info("Seed check: using the world seed. It learns from the natural dungeons you find (needs 2).");
+        }
+    }
+
+    private boolean seedActive(World world) {
+        return seedCheck.hasSeed() && world.getRegistryKey() == World.OVERWORLD;
     }
 
     /** Reads the mob and decides natural / unnatural. Returns null while it is too early to judge. */
@@ -403,6 +464,21 @@ public class ChuklSpawnerNotifier extends Module {
     private String unnaturalReason(World world, BlockPos pos, String mob, String name, boolean hidden) {
         if (checkSurroundings.get()) {
             String structure = structureAround(world, pos);
+
+            // With a world seed: a dungeon spawner that stands exactly where the world generated one is natural.
+            // (A spawner that does NOT match is still judged by its surroundings, because a chunk can hold two dungeons.)
+            boolean dungeonMob = hidden || mob.equals("zombie") || mob.equals("skeleton") || mob.equals("spider");
+            if (dungeonMob && seedActive(world)) {
+                if ("dungeon".equals(structure)) {
+                    String message = seedCheck.observe(pos);
+                    if (message != null) {
+                        info(message);
+                        cacheDirty = true;
+                    }
+                }
+                if (seedCheck.verdict(pos) == DungeonSeedCheck.Verdict.MATCH) return null;
+            }
+
             if (structure == null) {
                 return hidden ? "no natural structure around it (mob hidden by the server)"
                     : "no natural structure around it (placed by a player?)";

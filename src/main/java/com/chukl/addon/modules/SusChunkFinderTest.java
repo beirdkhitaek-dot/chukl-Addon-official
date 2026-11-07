@@ -1056,6 +1056,15 @@ public class SusChunkFinderTest extends Module {
     private int timer;
     private final Map<ChunkPos, WorldChunk> seenChunks = new java.util.HashMap<>();
 
+    // Render cache: the plate list is rebuilt about 4 times a second instead of every frame
+    private Map<ChunkPos, Integer> cachedTargets = Map.of();
+    private Map<ChunkPos, Integer> cachedFrom;
+    private ChunkPos cachedHere;
+    private long cachedAt;
+    private int rescanCursor;
+    private int zoneSize = -1;
+    private long zoneAt;
+
     public SusChunkFinderTest() {
         super(ChuklAddon.CATEGORY, "chukl-sus-chunk-test", "Shows the ONE best chunk to dig at, with a glowing orb, a beam and a dig shaft. Follow the line from your crosshair and dig down. The coordinates go to chat.");
         SimpleMode.apply(advanced, java.util.Set.of("show-advanced-settings", "sensitivity", "amethyst", "underground-detection", "announce-best", "avoid-natural", "tracers", "deep-amethyst", "amethyst-esp", "amethyst-color", "deep-layer-notice", "target-hud"), settings);
@@ -1091,13 +1100,14 @@ public class SusChunkFinderTest extends Module {
 
         // One single-thread executor per worker. A given chunk always goes to the same worker, so two
         // scans of the same chunk can never run at once, while different chunks scan in parallel.
-        int count = Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors()));
+        int count = Math.max(1, Math.min(3, Runtime.getRuntime().availableProcessors() / 4)); // 2 on an 8-core phone: leaves the game its cores
         executors = new ExecutorService[count];
         for (int i = 0; i < count; i++) {
             int id = i;
             executors[i] = Executors.newSingleThreadExecutor(r -> {
                 Thread t = new Thread(r, "SusChunkFinderTest-Scan-" + id);
                 t.setDaemon(true);
+                t.setPriority(Thread.MIN_PRIORITY);
                 return t;
             });
         }
@@ -1249,6 +1259,7 @@ public class SusChunkFinderTest extends Module {
         var manager = mc.world.getChunkManager();
         ChunkPos center = mc.player.getChunkPos();
         int radius = mc.options.getViewDistance().getValue() + (smartAdjustment.get() ? 0 : 2);
+        int budget = 16; // new chunks handed to the workers per pass
         int farthest = 0;
 
         for (int cx = center.x - radius; cx <= center.x + radius; cx++) {
@@ -1261,6 +1272,8 @@ public class SusChunkFinderTest extends Module {
 
                 ChunkPos pos = new ChunkPos(cx, cz);
                 if (seenChunks.get(pos) != chunk) {
+                    if (budget <= 0) continue; // the rest is taken on the next pass, so a join never floods a weak CPU
+                    budget--;
                     seenChunks.put(pos, chunk);
                     queue(chunk);
                 }
@@ -1268,14 +1281,16 @@ public class SusChunkFinderTest extends Module {
         }
 
         // A server can reveal blocks after the chunk arrived (anti-xray, late block updates): look at the nearby chunks again now and then
+        // Rotates through the 9x9 area, 12 chunks per pass (a full round about every 20 seconds), instead of all 81 at once
         if (deepAm.get() && mc.player.age % 60 == 0) {
-            for (int dx = -4; dx <= 4; dx++) {
-                for (int dz = -4; dz <= 4; dz++) {
-                    if (!manager.isChunkLoaded(center.x + dx, center.z + dz)) continue;
-                    WorldChunk near = manager.getWorldChunk(center.x + dx, center.z + dz);
-                    if (near != null) queue(near);
-                }
+            for (int i = 0; i < 12; i++) {
+                int k = (rescanCursor + i) % 81;
+                int dx = k / 9 - 4, dz = k % 9 - 4;
+                if (!manager.isChunkLoaded(center.x + dx, center.z + dz)) continue;
+                WorldChunk near = manager.getWorldChunk(center.x + dx, center.z + dz);
+                if (near != null) queue(near);
             }
+            rescanCursor = (rescanCursor + 12) % 81;
         }
 
         // The farthest chunk the server actually sent us is the real radius (servers can cap your render distance)
@@ -1591,7 +1606,7 @@ public class SusChunkFinderTest extends Module {
             coach.tick(mc, !susChunks.isEmpty(), sensitivity.get(), m -> info(m));
         }
 
-        scanNewChunks();
+        if (mc.player.age % 4 == 0) scanNewChunks();
         probeHidden();
 
         if (debugInfo.get() && mc.player.age % 40 == 0) printDebug();
@@ -1599,7 +1614,7 @@ public class SusChunkFinderTest extends Module {
         if (mc.player.age % 100 == 50) amethystStatus();
 
         if (--timer > 0) return;
-        timer = 2; // refresh the sus list every other tick
+        timer = 6; // refresh the sus list a few times a second (every other tick was too heavy for phones)
 
         ClientWorld world = mc.world;
         int minSensitivity = effectiveSensitivity();
@@ -1624,15 +1639,20 @@ public class SusChunkFinderTest extends Module {
         adaptSensitivity(sus.size());
 
         // chunks that belong to (or touch) a natural structure
-        Set<ChunkPos> zone = new HashSet<>();
-        if (ignoreNatural.get()) {
+        long zoneNow = System.currentTimeMillis();
+        if (!ignoreNatural.get()) {
+            if (!naturalZone.isEmpty()) naturalZone = Set.of();
+        } else if (natMask.size() != zoneSize || zoneNow - zoneAt > 2000) { // only rebuilt when something changed
+            Set<ChunkPos> zone = new HashSet<>();
             for (ChunkPos c : natMask.keySet()) {
                 for (int dx = -1; dx <= 1; dx++) {
                     for (int dz = -1; dz <= 1; dz++) zone.add(new ChunkPos(c.x + dx, c.z + dz));
                 }
             }
+            naturalZone = zone;
+            zoneSize = natMask.size();
+            zoneAt = zoneNow;
         }
-        naturalZone = zone;
 
         // underground light: analyse a chunk a few seconds after it was scanned, once its light data has arrived
         if ((lightBox.get() || lightEsp.get() || deepSignal.get() || (blocksHidden && adaptive.get())) && isOverworld(world)) {
@@ -2717,7 +2737,12 @@ public class SusChunkFinderTest extends Module {
             int sens = Math.max(1, effectiveSensitivity());
             Map<ChunkPos, Integer> levels = susLevel;
 
-            Map<ChunkPos, Integer> targets = new java.util.HashMap<>();
+            long nowMs = System.currentTimeMillis();
+            Map<ChunkPos, Integer> targets;
+            if (chunks == cachedFrom && here.equals(cachedHere) && nowMs - cachedAt < 250) {
+                targets = cachedTargets;
+            } else {
+            targets = new java.util.HashMap<>();
             for (Map.Entry<ChunkPos, Integer> entry : chunks.entrySet()) {
                 ChunkPos cp = entry.getKey();
 
@@ -2733,6 +2758,11 @@ public class SusChunkFinderTest extends Module {
                     a = Math.max(10, (int) (baseAlpha * strength));
                 }
                 targets.put(cp, a);
+            }
+            cachedTargets = targets;
+            cachedFrom = chunks;
+            cachedHere = here;
+            cachedAt = nowMs;
             }
             // one rounded plate per chunk (never two on top of each other), fading in and out
             for (SusAnim.Plate pl : anim.plates(targets, animations.get(), fadeSeconds.get())) {

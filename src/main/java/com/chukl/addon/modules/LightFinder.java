@@ -52,7 +52,8 @@ public class LightFinder extends Module {
     private record ScanResult(List<LitBlock> blocks, List<LightSection> sections) {}
 
     private static final int MAX_CANDIDATES = 400000;
-    private static final int MAX_LOS_CHECKS = 20000;
+    private static final int MAX_LOS_CHECKS = 3000;   // nearest first; each check is a ray cast on the game thread
+    private static final int MAX_DRAWN = 6000;        // most blocks drawn per frame
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgRender = settings.createGroup("Render");
@@ -61,8 +62,8 @@ public class LightFinder extends Module {
 
     private final Setting<Integer> scanRadius = sgGeneral.add(new IntSetting.Builder()
         .name("scan-radius")
-        .description("Chunks around you to scan.")
-        .defaultValue(12)
+        .description("Chunks around you to scan. Lower is smoother.")
+        .defaultValue(8)
         .range(1, 32)
         .sliderRange(1, 32)
         .build()
@@ -88,8 +89,8 @@ public class LightFinder extends Module {
 
     private final Setting<Integer> scanInterval = sgGeneral.add(new IntSetting.Builder()
         .name("scan-interval")
-        .description("Seconds between scans.")
-        .defaultValue(2)
+        .description("Seconds between scans (it scans less often while you stand still).")
+        .defaultValue(3)
         .range(1, 30)
         .sliderRange(1, 15)
         .build()
@@ -107,7 +108,7 @@ public class LightFinder extends Module {
     private final Setting<Integer> blockDistance = sgRender.add(new IntSetting.Builder()
         .name("block-render-distance")
         .description("Blocks mode: only draw lit blocks within this many blocks of you.")
-        .defaultValue(160)
+        .defaultValue(64)
         .range(8, 512)
         .sliderRange(8, 512)
         .visible(() -> renderMode.get() == RenderMode.Blocks)
@@ -116,8 +117,8 @@ public class LightFinder extends Module {
 
     private final Setting<Integer> maxBlocks = sgRender.add(new IntSetting.Builder()
         .name("max-blocks")
-        .description("Blocks mode: most lit blocks drawn at once (nearest first).")
-        .defaultValue(50000)
+        .description("Blocks mode: most lit blocks found at once (nearest first). At most 6000 are drawn per frame to keep the game smooth.")
+        .defaultValue(20000)
         .range(100, 400000)
         .sliderRange(100, 400000)
         .visible(() -> renderMode.get() == RenderMode.Blocks)
@@ -192,6 +193,8 @@ public class LightFinder extends Module {
     private ExecutorService executor;
     private int timer;
     private int visibilityTimer;
+    private double lastScanX = Double.NaN;
+    private double lastScanZ = Double.NaN;
 
     private final Color[] levelColors = new Color[16];
     private int cachedAlpha = -1;
@@ -205,11 +208,14 @@ public class LightFinder extends Module {
         executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "LightFinder-Scan");
             t.setDaemon(true);
-                        return t;
+            t.setPriority(Thread.MIN_PRIORITY);
+            return t;
         });
         clearData();
         timer = 0;
         visibilityTimer = 0;
+        lastScanX = Double.NaN;
+        lastScanZ = Double.NaN;
     }
 
     @Override
@@ -244,7 +250,11 @@ public class LightFinder extends Module {
         }
 
         if (--timer > 0) return;
-        timer = scanInterval.get() * 20;
+        // Standing still: the light around you rarely changes, so scan a third as often
+        boolean still = !Double.isNaN(lastScanX) && Math.hypot(mc.player.getX() - lastScanX, mc.player.getZ() - lastScanZ) < 6;
+        lastScanX = mc.player.getX();
+        lastScanZ = mc.player.getZ();
+        timer = scanInterval.get() * 20 * (still ? 3 : 1);
 
         if (!scanning.compareAndSet(false, true)) return;
 
@@ -364,7 +374,9 @@ public class LightFinder extends Module {
 
             Color[] colors = colorsFor(blockAlpha.get());
 
+            int drawn = 0;
             for (LitBlock block : list) {
+                if (drawn++ >= MAX_DRAWN) break; // keeps weak devices smooth
                 Color color = colors[block.level()];
                 event.renderer.box(block.pos(), color, color, ShapeMode.Lines, 0);
             }

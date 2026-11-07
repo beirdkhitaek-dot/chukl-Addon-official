@@ -3,6 +3,17 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.52.0 - Spawner Seed And Smoother Scanning
+**What's new**
+- **Chukl Spawner Notifier has a new `world-seed` setting.** With the seed, a dungeon spawner that stands exactly where the world generated one is always counted as natural, even if its room was damaged. It learns from the natural dungeons you find (it needs 2), and tells you in chat when it is ready, or when the seed looks wrong. A spawner that does not match is still judged by its surroundings as before, so nothing natural gets flagged because of the seed. Overworld only. If you leave the box empty it uses the seed from Sus Chunk Finder Test, if you typed one there.
+- **Sus Chunk Finder and Sus Chunk Finder Test are lighter on the game.** They use at most 2 background threads on a phone (they used up to 8) at low priority. New chunks are handed over a few at a time instead of all at once, the deep amethyst re-check goes around the area instead of rescanning 81 chunks every 3 seconds, the lists refresh about 3 times a second instead of 10, and the colored squares are drawn from a cache. What they find is unchanged.
+- **Light Debug (in Chukl Render) no longer reads about a million blocks every half second.** It now reads each chunk's light data once and again every few seconds, nearest chunks first, and draws only the nearest 2500 blocks within 40 blocks. **Min Light now starts at 1** (it started at 0, which marked almost every block). Your saved settings are kept.
+- **Light Finder scans less while you stand still** and draws at most 6000 blocks per frame. New setups start lighter: scan-radius 8, scan-interval 3 seconds, block-render-distance 64, max-blocks 20000. Settings you already saved are kept.
+
+**How to use**
+- **Spawner seed:** open **Chukl Spawner Notifier**, type your world seed in **world-seed**, and walk past a couple of natural dungeons. Chat says "Seed check: calibrated" when it is ready. The module list shows "seed: learning", "seed: ok" or "seed: wrong?" next to the module name. Wrong seed? Fix the box and it learns again.
+- **Smoother game:** nothing to set. If it is still slow, lower **scan-radius** in Light Finder, or turn off modules you are not using.
+
 ## v1.51.0 - Smarter Chat Help
 **What's new**
 - **Sus Chunk Finder and Sus Chunk Finder Test tell you where things are:** messages now say how far away a spot is and in which direction, for example "Strong base zone at X 1200, Z -300 (420 blocks NE)". The best dig spot message says why it was picked. **notify-zones** is now on by default.
