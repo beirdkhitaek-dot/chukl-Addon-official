@@ -2,6 +2,7 @@ package com.chukl.addon;
 
 import com.chukl.addon.modules.DeepBlockEntityEsp;
 import com.chukl.addon.modules.DugOutHighlighter;
+import com.chukl.addon.modules.EyeOfEnderLocator;
 import com.chukl.addon.modules.LightFinder;
 import com.chukl.addon.modules.GoatBlockEsp;
 import com.chukl.addon.modules.FrostStorageEsp;
@@ -60,6 +61,7 @@ public class ChuklAddon extends MeteorAddon {
 
         Modules.get().add(new DeepBlockEntityEsp());
         Modules.get().add(new DugOutHighlighter());
+        Modules.get().add(new EyeOfEnderLocator());
         Modules.get().add(new SusChunkFinder());
         Modules.get().add(new SusChunkFinderTest());
         Modules.get().add(new ChuklSpawnerNotifier());

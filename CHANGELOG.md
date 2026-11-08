@@ -3,6 +3,20 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.53.0 - Eye Of Ender Locator
+**What's new**
+- **New module: Eye of Ender Locator.** It finds the stronghold for you. Every thrown eye of ender flies straight toward it, so two throws from different spots cross exactly there. The module watches the eyes itself, so there is nothing to measure or type.
+- After each throw it tells you in chat where the stronghold is, how far and in which direction, and about how exact that is. Every extra throw from a new spot makes it more exact.
+- It draws a line along each throw and a tall beam with a square at the stronghold, so you can see it from far away.
+
+**How to use**
+1. Turn on **eye-of-ender-locator**.
+2. Throw an eye of ender and wait until it drops. Chat says "Throw 1 saved".
+3. Walk sideways (the farther the better, even 20 blocks helps), then throw another eye. Chat gives the position, for example "Stronghold is near X 1200, Z -2300 (about 30 blocks either way, 2100 blocks NE of you)".
+4. Walk there and dig down. The portal room is usually within about 100 blocks of that point.
+- If chat says the lines cross behind a throw, one throw was off: throw again from a new spot. Throwing again from the same spot replaces the old throw.
+- Only works in the Overworld. Do not want the chat messages? Turn off **chat-messages**. Do not want the lines? Turn off **show-in-world**.
+
 ## v1.52.0 - Spawner Seed And Smoother Scanning
 **What's new**
 - **Chukl Spawner Notifier has a new `world-seed` setting.** With the seed, a dungeon spawner that stands exactly where the world generated one is always counted as natural, even if its room was damaged. It learns from the natural dungeons you find (it needs 2), and tells you in chat when it is ready, or when the seed looks wrong. A spawner that does not match is still judged by its surroundings as before, so nothing natural gets flagged because of the seed. Overworld only. If you leave the box empty it uses the seed from Sus Chunk Finder Test, if you typed one there.
