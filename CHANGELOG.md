@@ -3,6 +3,20 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.70.0 - Chunk Finder, Prime Chunk Finder, Storage ESP
+**What's new**
+- **New module: Chukl Chunk Finder.** Marks loaded chunks that probably hold a base. It adds up chests, barrels, shulkers, ender chests, hoppers and furnaces, plus torches, signs, beds and similar blocks that nature does not place underground. Deep things count more, surface things less. Squares run from yellow (maybe) to red (very likely), with a beam over the strongest one and a chat message for each new chunk.
+- **New module: Prime Chunk Finder.** The strict one. It adds every chunk to its 8 neighbours and shows only the ONE best 3x3 area, and only when the evidence is well above a high bar. It says how strong it is ("Likely", "Strong", "Very strong") and where it is. Far fewer false alarms than Chunk Finder.
+- **New module: Chukl Storage ESP** (in Chukl Render). Boxes around chests, trapped chests, barrels, shulkers, ender chests, hoppers, furnaces and dispensers, one color per type. It can show only underground storage, hide lone chests with **min-per-chunk**, and never draws more than **max-boxes**.
+- **Built to stay smooth on a phone.** Chunk Finder and Prime Chunk Finder share one scanner that uses no background threads: it only reads chunks the game has already loaded, 3 per tick, and re-reads each one every 8 seconds. Storage ESP rebuilds its list about 2 times a second and draws the nearest boxes first.
+- Your older modules are unchanged. v1.70 adds the new ones next to them.
+
+**How to use**
+- **Chunk Finder:** turn on **chukl-chunk-finder**. Walk around, and marked chunks appear with colors by strength. Too many squares? Raise **min-score**. Too few? Lower it.
+- **Prime Chunk Finder:** turn on **prime-chunk-finder** and walk. When it finds one strong area, chat gives the coordinates and a beam marks it. Raise **prime-min** for stricter results, lower it to see more.
+- **Storage ESP:** turn on **chukl-storage-esp**. For hidden bases try **underground-only** with **min-per-chunk** 3.
+- Only chunks the game has loaded can be checked, so a bigger render distance helps.
+
 ## v1.53.0 - Eye Of Ender Locator
 **What's new**
 - **New module: Eye of Ender Locator.** It finds the stronghold for you. Every thrown eye of ender flies straight toward it, so two throws from different spots cross exactly there. The module watches the eyes itself, so there is nothing to measure or type.
