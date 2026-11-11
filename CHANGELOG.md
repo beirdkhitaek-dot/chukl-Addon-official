@@ -3,6 +3,13 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.70.1 - Storage ESP Looks
+**What's new**
+- **Chukl Storage ESP has look options now.** **style**: Box (fill and outline), Outline_Only, Fill_Only, or Corners (just the corner brackets of each box). **box-size** shrinks or grows the box around the block. **corner-length** sets the bracket length. **pulse** makes the fill slowly fade in and out. Every storage type still has its own color.
+
+**How to use**
+- Open **chukl-storage-esp** and try **style**, **box-size** and **pulse** until it looks the way you like, then change the colors under Colors.
+
 ## v1.70.0 - Chunk Finder, Prime Chunk Finder, Storage ESP
 **What's new**
 - **New module: Chukl Chunk Finder.** Marks loaded chunks that probably hold a base. It adds up chests, barrels, shulkers, ender chests, hoppers and furnaces, plus torches, signs, beds and similar blocks that nature does not place underground. Deep things count more, surface things less. Squares run from yellow (maybe) to red (very likely), with a beam over the strongest one and a chat message for each new chunk.

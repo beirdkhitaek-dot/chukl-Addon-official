@@ -7,6 +7,7 @@ import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.ColorSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
@@ -30,6 +31,8 @@ import java.util.Map;
  * per type. The list is rebuilt a few times a second and capped, so a huge storage hall cannot hurt FPS.
  */
 public class ChuklStorageEsp extends Module {
+    public enum Style { Box, Outline_Only, Fill_Only, Corners }
+
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgTypes = settings.createGroup("Types");
     private final SettingGroup sgColors = settings.createGroup("Colors");
@@ -51,8 +54,21 @@ public class ChuklStorageEsp extends Module {
         .name("min-per-chunk").description("Only show storage in chunks that have at least this many. 3 or more hides lone natural chests.")
         .defaultValue(1).range(1, 20).sliderRange(1, 10).build());
 
-    private final Setting<ShapeMode> shape = sgGeneral.add(new EnumSetting.Builder<ShapeMode>()
-        .name("shape-mode").description("How the boxes are drawn.").defaultValue(ShapeMode.Both).build());
+    private final Setting<Style> style = sgGeneral.add(new EnumSetting.Builder<Style>()
+        .name("style").description("Box = fill and outline. Outline_Only and Fill_Only draw one of them. Corners draws only the corner brackets of each box.")
+        .defaultValue(Style.Box).build());
+
+    private final Setting<Double> inset = sgGeneral.add(new DoubleSetting.Builder()
+        .name("box-size").description("How much of the block the box covers. 1.0 is the full block, smaller shrinks it.")
+        .defaultValue(1.0).range(0.2, 1.1).sliderRange(0.2, 1.1).build());
+
+    private final Setting<Double> bracket = sgGeneral.add(new DoubleSetting.Builder()
+        .name("corner-length").description("Length of each corner bracket, as part of the box size.")
+        .defaultValue(0.3).range(0.1, 0.5).sliderRange(0.1, 0.5)
+        .visible(() -> style.get() == Style.Corners).build());
+
+    private final Setting<Boolean> pulse = sgGeneral.add(new BoolSetting.Builder()
+        .name("pulse").description("Make the fill slowly fade in and out.").defaultValue(false).build());
 
     private final Setting<Integer> maxBoxes = sgGeneral.add(new IntSetting.Builder()
         .name("max-boxes").description("Never draw more than this many boxes at once. The closest ones win.")
@@ -158,9 +174,22 @@ public class ChuklStorageEsp extends Module {
         List<Item> list = items;
         if (list.isEmpty()) return;
 
+        Style st = style.get();
         int a = fillAlpha.get();
+        if (pulse.get()) {
+            double wave = 0.5 + 0.5 * Math.sin(System.currentTimeMillis() / 400.0);
+            a = (int) Math.max(5, a * (0.25 + 0.75 * wave));
+        }
         boolean lines = tracers.get();
-        ShapeMode mode = shape.get();
+        ShapeMode mode = switch (st) {
+            case Outline_Only -> ShapeMode.Lines;
+            case Fill_Only -> ShapeMode.Sides;
+            default -> ShapeMode.Both;
+        };
+        double size = inset.get();
+        double pad = (1.0 - size) / 2.0;
+        double len = bracket.get() * size;
+
         Map<BaseScanner.Kind, Color> fills = new EnumMap<>(BaseScanner.Kind.class);
         for (BaseScanner.Kind k : BaseScanner.Kind.values()) {
             SettingColor c = colors.get(k).get();
@@ -169,10 +198,32 @@ public class ChuklStorageEsp extends Module {
 
         for (Item it : list) {
             SettingColor line = colors.get(it.kind()).get();
-            event.renderer.box(it.x(), it.y(), it.z(), it.x() + 1, it.y() + 1, it.z() + 1, fills.get(it.kind()), line, mode, 0);
+            double x1 = it.x() + pad, y1 = it.y() + pad, z1 = it.z() + pad;
+            double x2 = it.x() + 1 - pad, y2 = it.y() + 1 - pad, z2 = it.z() + 1 - pad;
+
+            if (st == Style.Corners) {
+                corners(event, x1, y1, z1, x2, y2, z2, len, line);
+            } else {
+                event.renderer.box(x1, y1, z1, x2, y2, z2, fills.get(it.kind()), line, mode, 0);
+            }
             if (lines) {
                 event.renderer.line(RenderUtils.center.x, RenderUtils.center.y, RenderUtils.center.z,
                     it.x() + 0.5, it.y() + 0.5, it.z() + 0.5, line);
+            }
+        }
+    }
+
+    /** Draws only the three short edges that meet at each of the 8 corners. */
+    private static void corners(Render3DEvent e, double x1, double y1, double z1, double x2, double y2, double z2, double len, Color c) {
+        for (int ix = 0; ix < 2; ix++) {
+            for (int iy = 0; iy < 2; iy++) {
+                for (int iz = 0; iz < 2; iz++) {
+                    double x = ix == 0 ? x1 : x2, y = iy == 0 ? y1 : y2, z = iz == 0 ? z1 : z2;
+                    double dx = ix == 0 ? len : -len, dy = iy == 0 ? len : -len, dz = iz == 0 ? len : -len;
+                    e.renderer.line(x, y, z, x + dx, y, z, c);
+                    e.renderer.line(x, y, z, x, y + dy, z, c);
+                    e.renderer.line(x, y, z, x, y, z + dz, c);
+                }
             }
         }
     }
