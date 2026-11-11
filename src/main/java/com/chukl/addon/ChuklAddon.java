@@ -1,6 +1,7 @@
 package com.chukl.addon;
 
 import com.chukl.addon.modules.ChuklChunkFinder;
+import com.chukl.addon.modules.ChuklDiscordPresence;
 import com.chukl.addon.modules.ChuklStorageEsp;
 import com.chukl.addon.modules.PrimeChunkFinder;
 import com.chukl.addon.modules.DeepBlockEntityEsp;
@@ -68,6 +69,7 @@ public class ChuklAddon extends MeteorAddon {
         Modules.get().add(new ChuklChunkFinder());
         Modules.get().add(new PrimeChunkFinder());
         Modules.get().add(new ChuklStorageEsp());
+        Modules.get().add(new ChuklDiscordPresence());
         Modules.get().add(new SusChunkFinder());
         Modules.get().add(new SusChunkFinderTest());
         Modules.get().add(new ChuklSpawnerNotifier());

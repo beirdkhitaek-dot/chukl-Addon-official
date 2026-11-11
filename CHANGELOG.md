@@ -3,6 +3,16 @@
 Every release has a section here: **what's new** and **how to use it**. The same text is published
 as the release notes on the [Releases page](https://github.com/beirdkhitaek-dot/chukl-addon-official/releases).
 
+## v1.71.0 - Discord Presence
+**What's new**
+- **New module: Chukl Discord Presence.** Shows "Playing ChuklAddon" with the version on your Discord profile, plus whether you are in the menu, singleplayer or multiplayer, and how long you have been playing. The server address is hidden unless you turn **show-server** on.
+
+**How to use**
+1. Go to discord.com/developers, make a New Application (its name is what Discord shows, for example "ChuklAddon") and copy its **Application ID**.
+2. Optional: under Rich Presence > Art Assets upload a picture and note its name.
+3. Turn on **chukl-discord-presence**, paste the ID into **application-id**, and turn the module off and on again. Your profile updates in a few seconds.
+- Needs the Discord app open on the same computer. It cannot work on a phone, because phones have no Discord connection for the game to use.
+
 ## v1.70.1 - Storage ESP Looks
 **What's new**
 - **Chukl Storage ESP has look options now.** **style**: Box (fill and outline), Outline_Only, Fill_Only, or Corners (just the corner brackets of each box). **box-size** shrinks or grows the box around the block. **corner-length** sets the bracket length. **pulse** makes the fill slowly fade in and out. Every storage type still has its own color.
